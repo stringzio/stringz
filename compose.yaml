@@ -1,0 +1,23 @@
+# Optional production-parity Postgres for the backend. The dev/self-host
+# default is SQLite at server/data/flowkit.db - zero setup, no Docker required.
+# Start Docker Desktop first, then: docker compose -f compose.yaml up -d postgres
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flowkit
+      POSTGRES_PASSWORD: flowkit
+      POSTGRES_DB: flowkit
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowkit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:

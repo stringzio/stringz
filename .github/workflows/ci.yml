@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Build (tsc -b strict + vite)
+        run: bun run build
+      - name: Server typecheck
+        run: cd server && bun run typecheck
+      - name: Lint app code
+        # The 11 errors in the vendored shadcn/ui files are pre-existing;
+        # app code must stay clean.
+        run: bun run lint:app
+
+  e2e:
+    runs-on: ubuntu-latest
+    # Browser checks need the dev servers + Postgres. Non-blocking until the
+    # harness proves stable in CI; tighten to required once it does.
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flowkit
+          POSTGRES_PASSWORD: flowkit
+          POSTGRES_DB: flowkit
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U flowkit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://flowkit:flowkit@localhost:5432/flowkit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install chromium
+      - name: Start dev servers
+        run: bun run dev:all &
+      - name: Wait for api
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8787/health && exit 0
+            sleep 2
+          done
+          echo "api did not come up"; exit 1
+      - name: Browser check
+        run: node scripts/browser-check.mjs

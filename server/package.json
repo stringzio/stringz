@@ -1,0 +1,29 @@
+{
+  "name": "flowkit-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@hono/trpc-server": "^0.3.4",
+    "@trpc/server": "^11.6.0",
+    "drizzle-orm": "^0.44.0",
+    "hono": "^4.8.0",
+    "pg": "^8.23.0",
+    "viem": "^2.56.7",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.21",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.0",
+    "typescript": "~5.9.3"
+  }
+}

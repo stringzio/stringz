@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Local env (WalletConnect project id, etc.) - never commit
+.env
+.env.*
+!.env.example
+
+# Server SQLite data + logs
+server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local verification scratch (Playwright screenshots, debug scripts)
+tmp-verify/
+
+# Internal planning/ops docs - not for the public repo
+INTEGRATION.md
+INFRA.md
+FlowKit-PRD.md
+info.md

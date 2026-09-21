@@ -1,0 +1,20 @@
+{
+  "name": "Stringz",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "features": {
+    "ghcr.io/devcontainers/features/bun:1": {}
+  },
+  "forwardPorts": [3000, 8787],
+  "portsAttributes": {
+    "3000": { "label": "web" },
+    "8787": { "label": "api" }
+  },
+  "postCreateCommand": "bun install",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  }
+}
