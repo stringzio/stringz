@@ -178,7 +178,7 @@ export const SERVICE_FIELDS: Partial<Record<ServiceId, FieldDef[]>> = {
     { key: "minAmount", label: "Minimum amount", type: "number", actions: ["Transfer event"], min: 0, placeholder: "10000", help: "Whole-token amount. Applies to ERC-20 transfers." },
     { key: "decimals", label: "Token decimals", type: "number", actions: ["Transfer event"], integer: true, min: 0, defaultValue: "18", help: "Decimals of the transferred token, used to scale the Minimum amount filter." },
     { key: "tokenId", label: "Token ID (NFTs)", type: "text", actions: ["Transfer event"], placeholder: "7842", help: "Only fire when this NFT token id moves. Leave empty for any token.", pattern: /^\d+$/, patternMessage: "Digits only - the token id as listed by the collection." },
-    { key: "eventSignature", label: "Event signature", type: "text", required: true, actions: ["Custom event"], placeholder: "Transfer(address indexed from, address indexed to, uint256 value)", help: "The event as written in the contract." },
+    { key: "eventSignature", label: "Event signature", type: "text", required: true, actions: ["Custom event"], placeholder: "Transfer(address indexed from, address indexed to, uint256 value)", help: "The event as written in the contract.", pattern: /^0x[0-9a-fA-F]{64}$|^[A-Za-z_]\w*\s*\([^()]*\)$/, patternMessage: "Use the event as written in the contract, e.g. Transfer(address indexed from, uint256 value) — or its 0x… topic hash." },
   ],
   "price-feed": [
     { key: "threshold", label: "Threshold (USD)", type: "number", required: true, min: 0, placeholder: "3000", help: "Price above/below: fires past this value. Price near (within 1%): fires within 1% of it." },
@@ -411,7 +411,7 @@ export const SERVICE_FIELDS: Partial<Record<ServiceId, FieldDef[]>> = {
     { key: "body", label: "JSON body", type: "textarea", actions: ["Post JSON"], placeholder: '{"hello":"world"}', help: "Sent as the request body." },
     { key: "body", label: "JSON body", type: "textarea", actions: ["Make a request"], placeholder: '{"hello":"world"}', help: "Sent as the request body.", showIf: (p) => p.method !== "GET" },
     { key: "secretName", label: "Auth token secret", type: "secret-name", pattern: SECRET_NAME_PATTERN, patternMessage: SECRET_NAME_MESSAGE, help: "Optional. Name of a secret in your .env. Leave blank for no auth. Its value is never stored in the flow." },
-    { key: "authScheme", label: "Auth style", type: "select", required: true, options: ["Bearer token", "Basic token", "Custom header"], defaultValue: "Bearer token", help: "How the secret value is attached. Basic token: the secret value must be base64-encoded \"user:password\".", showIf: (p) => !!p.secretName?.trim() },
+    { key: "authScheme", label: "Auth style", type: "select", required: true, options: ["Bearer token", "Basic token", "Custom header"], defaultValue: "Bearer token", help: "How the secret value is attached. Basic token: put user:password in your .env - Stringz base64-encodes it for you.", showIf: (p) => !!p.secretName?.trim() },
     { key: "authHeader", label: "Header name", type: "text", required: true, defaultValue: "Authorization", placeholder: "X-API-Key", help: "The header that carries the secret value.", showIf: (p) => !!p.secretName?.trim() && p.authScheme === "Custom header" },
   ],
 };

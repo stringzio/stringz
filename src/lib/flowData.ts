@@ -11,7 +11,7 @@
 import type { FlowNode } from "../data/services";
 import { getFieldsFor, fieldValue, fieldVisible } from "../data/fields";
 import { CHAIN_SELECTORS } from "../compiler/cre";
-import { resolvePath, resolveLeaf } from "./templateRefs";
+import { resolvePath, resolveLeaf, TEMPLATE_RE } from "./templateRefs";
 
 export type Json = Record<string, unknown>;
 export interface NodeIO {
@@ -172,16 +172,14 @@ export function sampleOutput(node: FlowNode): Json {
   }
 }
 
-const EXPR = /\{\{\s*([a-zA-Z0-9_-]+)\.([^}]+?)\s*\}\}/g;
-
 /**
  * Resolve {{nodeId.path.to.field}} expressions in text against the io map.
- * Uses the shared parse-on-descend resolver so a nested field of a JSON body
- * (or any array/object) resolves the same way here and in the exported workflow.
- * Unknown references resolve to an empty string so a half-built flow still runs.
+ * Uses the shared grammar + parse-on-descend resolver so a nested field of a
+ * JSON body (or any array/object) resolves the same way here and in the exported
+ * workflow. Unknown references resolve to an empty string so a half-built flow still runs.
  */
 export function resolveExpressions(text: string, io: Record<string, NodeIO>): string {
-  return text.replace(EXPR, (_whole, nodeId: string, path: string) =>
+  return text.replace(TEMPLATE_RE, (_whole, nodeId: string, path: string) =>
     resolveLeaf(resolvePath(io[nodeId]?.output, path))
   );
 }
@@ -308,6 +306,8 @@ export interface RunResult {
   provenance: Record<string, RunSource>;
   /** nodeId -> human-readable failure reason; those nodes render red. */
   errors: Record<string, string>;
+  /** The gate node that halted the flow (downstream steps skipped), or null. */
+  haltedBy: string | null;
 }
 
 /**
@@ -387,5 +387,5 @@ export function executeRun(
     io[id] = { input, output };
     prevOutput = output;
   }
-  return { io, provenance, errors };
+  return { io, provenance, errors, haltedBy };
 }
