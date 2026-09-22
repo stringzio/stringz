@@ -8,6 +8,7 @@
  */
 import { SERVICES, type FlowNode, type FlowEdge } from "../data/services";
 import { validateNodeParams, fieldVisible, fieldValue, getFieldsFor } from "../data/fields";
+import { extractTemplateRefs } from "../lib/templateRefs";
 
 export interface BlueprintNode {
   id: string;
@@ -39,6 +40,7 @@ export type BlueprintErrorCode =
   | "MULTIPLE_TRIGGERS"
   | "NO_TRIGGER"
   | "MISSING_PARAMS"
+  | "UNKNOWN_REFERENCE"
   | "UNSUPPORTED_MODULE";
 
 export class BlueprintError extends Error {
@@ -102,6 +104,27 @@ export function toBlueprint(name: string, nodes: FlowNode[], edges: FlowEdge[]):
     throw new BlueprintError(
       `Missing or invalid configuration:\n${paramProblems.map((p) => `- ${p}`).join("\n")}`,
       "MISSING_PARAMS"
+    );
+
+  // Catch `{{nodeId.field}}` templates that point at a node id that does not
+  // exist (a typo, or the literal `{{nodeId.field}}` placeholder). These would
+  // otherwise resolve to "" at runtime — a silent blank in a message body, or a
+  // silently wrong on-chain amount/address. Surface them loudly instead.
+  const knownIds = new Set(nodes.map((n) => n.id));
+  const badRefs = ordered.flatMap((n) => {
+    const name = SERVICES[n.service].name;
+    return Object.values(n.params ?? {}).flatMap((value) =>
+      typeof value === "string"
+        ? extractTemplateRefs(value)
+            .filter((r) => !knownIds.has(r.nodeId))
+            .map((r) => `${r.raw} in ${name} — no node has id "${r.nodeId}"`)
+        : []
+    );
+  });
+  if (badRefs.length > 0)
+    throw new BlueprintError(
+      `Unknown reference(s):\n${[...new Set(badRefs)].map((p) => `- ${p}`).join("\n")}`,
+      "UNKNOWN_REFERENCE"
     );
 
   return {
