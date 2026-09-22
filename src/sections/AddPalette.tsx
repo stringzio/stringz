@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Command } from "cmdk";
 import { Search } from "lucide-react";
 import { SERVICES, type ServiceId } from "../data/services";
+import { isHostedOnly } from "../compiler/cre";
 
 /**
  * Keyboard-first node search (Phase 3d): Cmd/Ctrl+K opens it, typing filters
@@ -49,23 +50,40 @@ export default function AddPalette({
             <Command.Empty className="px-4 py-8 text-center text-[12.5px] text-gray-400">
               No modules match.
             </Command.Empty>
-            {(Object.keys(SERVICES) as ServiceId[]).map((sid) => (
-              <Command.Item
-                key={sid}
-                value={`${SERVICES[sid].name} ${sid} ${SERVICES[sid].actions.join(" ")}`}
-                onSelect={() => {
-                  onAdd(sid);
-                  onClose();
-                }}
-                className="flex cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 data-[selected=true]:bg-gray-50 [&>svg]:h-6 [&>svg]:w-6"
-              >
-                {SERVICES[sid].icon}
-                <span>
-                  <span className="block text-[13.5px] font-bold text-[#1a1a1a]">{SERVICES[sid].name}</span>
-                  <span className="block text-[11px] text-gray-400">{SERVICES[sid].actions.join(" · ")}</span>
-                </span>
-              </Command.Item>
-            ))}
+            {(Object.keys(SERVICES) as ServiceId[]).map((sid) => {
+              // Hosted-only nodes can't export yet — disabled + "Soon", not hidden.
+              const hosted = isHostedOnly(sid);
+              return (
+                <Command.Item
+                  key={sid}
+                  value={`${SERVICES[sid].name} ${sid} ${SERVICES[sid].actions.join(" ")}`}
+                  disabled={hosted}
+                  onSelect={() => {
+                    if (hosted) return;
+                    onAdd(sid);
+                    onClose();
+                  }}
+                  className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 [&>svg]:h-6 [&>svg]:w-6 ${
+                    hosted
+                      ? "cursor-not-allowed opacity-50"
+                      : "cursor-pointer data-[selected=true]:bg-gray-50"
+                  }`}
+                >
+                  {SERVICES[sid].icon}
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-[13.5px] font-bold text-[#1a1a1a]">
+                      {SERVICES[sid].name}
+                      {hosted && (
+                        <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-gray-400">
+                          Soon
+                        </span>
+                      )}
+                    </span>
+                    <span className="block text-[11px] text-gray-400">{SERVICES[sid].actions.join(" · ")}</span>
+                  </span>
+                </Command.Item>
+              );
+            })}
           </Command.List>
           <div className="border-t border-gray-100 px-4 py-2.5 text-[10.5px] font-medium text-gray-300">
             Enter to add - Esc to close
