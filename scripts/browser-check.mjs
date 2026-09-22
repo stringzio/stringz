@@ -217,6 +217,9 @@ for (const [w, h, label] of [[390, 844, "phone"]]) {
   await page.goto(BASE, { waitUntil: "networkidle" });
   await page.screenshot({ path: `${SHOTS}/10-landing-${label}.png`, fullPage: true });
   await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
+  await page.getByText("The Stringz canvas isn’t designed for small screens", { exact: true }).waitFor({ timeout: 15000 });
+  check(`mobile (${label}): small-screen gate shown`, true);
+  await page.getByRole("button", { name: "Continue anyway", exact: true }).click();
   await page.locator('[aria-label="Connect from Price Feed"]').first().waitFor({ timeout: 15000 });
   await page.screenshot({ path: `${SHOTS}/11-app-${label}.png` });
   check(`mobile (${label}): no console errors`, consoleErrors.length === 0, consoleErrors.join(" | "));

@@ -2,6 +2,7 @@ import { Lock } from "lucide-react";
 import { getFieldsFor, fieldVisible, fieldValue, resolveOptions, type FieldDef } from "../data/fields";
 import type { FlowNode } from "../data/services";
 import TemplateTextarea, { type RefInfo } from "../components/TemplateTextarea";
+import { extractTemplateRefs } from "../lib/templateRefs";
 
 function FieldInput({
   def,
@@ -11,6 +12,7 @@ function FieldInput({
   opts,
   onChange,
   resolveRef,
+  badRef,
 }: {
   def: FieldDef;
   value: string;
@@ -19,8 +21,9 @@ function FieldInput({
   opts: string[];
   onChange: (key: string, value: string) => void;
   resolveRef?: (nodeId: string) => RefInfo | null;
+  badRef?: boolean;
 }) {
-  const ring = invalid || missing ? "ring-2 ring-[#C0435A]/40" : "focus:ring-2 focus:ring-[#3f6b4f]/30";
+  const ring = invalid || missing || badRef ? "ring-2 ring-[#C0435A]/40" : "focus:ring-2 focus:ring-[#3f6b4f]/30";
 
   if (def.type === "select") {
     if (opts.length <= 4) {
@@ -110,6 +113,11 @@ export default function NodeFields({
           const opts = resolveOptions(def, params);
           const invalid = !!value && !!def.pattern && !def.pattern.test(value.trim());
           const missing = !!def.required && !value.trim();
+          // Templates pointing at a node id that doesn't exist resolve to "" —
+          // flag them here so the mistake is visible before export blocks on it.
+          const badRefs = resolveRef
+            ? extractTemplateRefs(value).filter((r) => !resolveRef(r.nodeId))
+            : [];
           const span = def.type === "textarea" || (def.type === "select" && opts.length > 4);
           return (
             <div key={`${node.service}:${def.key}:${def.label}`} className={span ? "md:col-span-2" : undefined}>
@@ -119,11 +127,20 @@ export default function NodeFields({
                   {def.required && <span className="text-[#C0435A]"> *</span>}
                 </span>
               </div>
-              <FieldInput def={def} value={value} invalid={invalid} missing={missing} opts={opts} onChange={onParam} resolveRef={resolveRef} />
+              <FieldInput def={def} value={value} invalid={invalid} missing={missing} opts={opts} onChange={onParam} resolveRef={resolveRef} badRef={badRefs.length > 0} />
               {invalid && def.patternMessage && (
                 <div className="mt-1 text-[11.5px] font-medium text-[#C0435A]">{def.patternMessage}</div>
               )}
-              {!invalid && def.help && <div className="mt-1 text-[11.5px] leading-snug text-gray-400">{def.help}</div>}
+              {badRefs.length > 0 && (
+                <div className="mt-1 text-[11.5px] font-medium leading-snug text-[#C0435A]">
+                  {badRefs.length === 1
+                    ? `Unknown reference ${badRefs[0].raw} — no node has that id.`
+                    : `Unknown references: ${badRefs.map((r) => r.raw).join(", ")} — no node has those ids.`}
+                </div>
+              )}
+              {!invalid && badRefs.length === 0 && def.help && (
+                <div className="mt-1 text-[11.5px] leading-snug text-gray-400">{def.help}</div>
+              )}
             </div>
           );
         })}

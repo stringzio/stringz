@@ -200,7 +200,8 @@ export const SERVICE_FIELDS: Partial<Record<ServiceId, FieldDef[]>> = {
     { key: "tokenAddress", label: "Token address", type: "text", required: true, actions: ["Send ERC-20"], placeholder: "0x…", help: "The ERC-20 token contract.", pattern: ADDRESS_PATTERN, patternMessage: ADDRESS_MESSAGE },
     { key: "tokenAddress", label: "Token address (optional)", type: "text", actions: ["Batch send"], placeholder: "0x…", help: "Leave empty to send the chain's native token.", pattern: ADDRESS_PATTERN, patternMessage: ADDRESS_MESSAGE },
     { key: "toAddress", label: "To", type: "text", required: true, actions: ["Send ERC-20", "Send native"], placeholder: "0x…", help: "Recipient wallet or contract. To move native currency (ETH etc.), use the Send native action here - contract-call writes cannot carry native value in CRE.", pattern: ADDRESS_PATTERN, patternMessage: ADDRESS_MESSAGE },
-    { key: "amount", label: "Amount", type: "number", required: true, actions: ["Send ERC-20", "Send native"], min: 0, placeholder: "25", help: "Whole-token amount. ERC-20 sends assume 18 decimals (check the token's real decimals before exporting)." },
+    { key: "amount", label: "Amount", type: "number", required: true, actions: ["Send ERC-20", "Send native"], min: 0, placeholder: "25", help: "Whole-token amount (e.g. 25 = 25 tokens). Native sends use 18 decimals; ERC-20 uses the Decimals field below." },
+    { key: "decimals", label: "Token decimals", type: "number", required: true, actions: ["Send ERC-20"], integer: true, min: 0, max: 36, defaultValue: "18", help: "Decimals of THIS token — USDC/USDT use 6, most others 18. A wrong value sends the wrong amount on-chain, so confirm it (e.g. on the token's explorer page)." },
     { key: "recipients", label: "Recipients", type: "textarea", required: true, actions: ["Batch send"], placeholder: "0x…, 10", help: "One transfer per line: address, amount." },
   ],
   ccip: [
