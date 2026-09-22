@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Search, ChevronRight, ChevronDown, Sparkles } from "lucide-react";
 import { SERVICES, type ServiceId } from "../data/services";
+import { isHostedOnly } from "../compiler/cre";
 
 interface ToolItem {
   service: ServiceId;
@@ -77,14 +78,42 @@ function matches(item: ToolItem, q: string): boolean {
 
 function ToolButton({ item, onAdd }: { item: ToolItem; onAdd: (s: ServiceId) => void }) {
   const s = SERVICES[item.service];
+  const icon = (
+    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 [&>svg]:h-4 [&>svg]:w-4">
+      {s.icon}
+    </span>
+  );
+
+  // Hosted-only nodes can't compile to a CRE workflow yet, so they aren't
+  // addable — shown disabled with a "Soon" tag rather than hidden, to keep the
+  // roadmap visible and stop users building flows that can't export.
+  if (isHostedOnly(item.service)) {
+    return (
+      <div
+        aria-disabled
+        title="Runs on the Stringz cloud runner — coming soon"
+        className="mb-1.5 flex w-full cursor-not-allowed select-none items-start gap-3 rounded-2xl px-2 py-2 text-left opacity-50"
+      >
+        {icon}
+        <span>
+          <span className="flex items-center gap-1.5 text-[13px] font-bold text-[#1a1a1a]">
+            {s.name}
+            <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-gray-400">
+              Soon
+            </span>
+          </span>
+          <span className="block text-[11px] leading-snug text-gray-400">{item.desc}</span>
+        </span>
+      </div>
+    );
+  }
+
   return (
     <button
       onClick={() => onAdd(item.service)}
       className="mb-1.5 flex w-full items-start gap-3 rounded-2xl px-2 py-2 text-left transition hover:bg-gray-50 active:bg-gray-100"
     >
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 [&>svg]:h-4 [&>svg]:w-4">
-        {s.icon}
-      </span>
+      {icon}
       <span>
         <span className="block text-[13px] font-bold text-[#1a1a1a]">{s.name}</span>
         <span className="block text-[11px] leading-snug text-gray-400">{item.desc}</span>

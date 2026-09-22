@@ -29,9 +29,23 @@ export const CHAIN_SELECTORS: Record<FlowChain, string> = {
   avalanche: "avalanche-mainnet",
 };
 
-/** What exported CRE projects can actually run today (readiness + errors). */
-const EXPORTABLE_MODULES =
-  "webhooks, slack, discord, telegram, http-request, text-parser, variables, flow-control, trigger, sleep, price-feed, wallet-balance, gas-price, evm-event, contract-call, token-transfer, swap, ccip";
+/** What exported CRE projects can actually run today; the rest need the hosted runner. */
+const EXPORTABLE_SERVICES = [
+  "webhooks", "slack", "discord", "telegram", "http-request", "text-parser",
+  "variables", "flow-control", "trigger", "sleep", "price-feed", "wallet-balance",
+  "gas-price", "evm-event", "contract-call", "token-transfer", "swap", "ccip",
+] as const;
+const EXPORTABLE_MODULES = EXPORTABLE_SERVICES.join(", ");
+
+/**
+ * True for the app-integration nodes that only run on the hosted Stringz runner
+ * (ChatGPT, Gmail, Google Drive/Sheets, YouTube, Calendar, Notion, Canva, X) and
+ * cannot compile to a CRE workflow yet. Single source of truth for the palette
+ * (disabled) and the export gate (`cloudRunnerError`).
+ */
+export function isHostedOnly(service: ServiceId): boolean {
+  return !(EXPORTABLE_SERVICES as readonly string[]).includes(service);
+}
 
 /** The secret for these services is an API key or bot token, not a callable URL - they need the hosted Stringz runner. */
 function cloudRunnerError(module: string, action?: string): BlueprintError {
