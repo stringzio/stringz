@@ -56,12 +56,14 @@ const ERC20_TRANSFER_ABI = JSON.stringify([
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
-/** Exact whole-token -> wei conversion (18 decimals), no float rounding. */
-function wholeTokensToWei(amount: string, context: string): bigint {
+/** Exact whole-token -> base-unit conversion for the token's `decimals`, no float rounding. */
+function wholeTokensToWei(amount: string, context: string, decimals = 18): bigint {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36)
+    throw new BlueprintError(`${context}: "${decimals}" is not a valid token decimals (0-36).`, "MISSING_PARAMS");
   const m = /^(\d+)(?:\.(\d+))?$/.exec(amount.trim());
   if (!m) throw new BlueprintError(`${context}: "${amount}" is not a valid amount.`, "MISSING_PARAMS");
-  const frac = (m[2] ?? "").padEnd(18, "0").slice(0, 18);
-  return BigInt(m[1]) * 1000000000000000000n + BigInt(frac || "0");
+  const frac = (m[2] ?? "").padEnd(decimals, "0").slice(0, decimals);
+  return BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt(frac || "0");
 }
 
 /** Compile-time calldata encoding; parse failures surface as export-time BlueprintErrors. */
@@ -888,7 +890,7 @@ function emitConfig(bp: Blueprint, schedule: string): string {
         const token = p.tokenAddress?.trim() ?? "";
         if (!ADDRESS_RE.test(token))
           throw new BlueprintError(`${label}: "Token address" must be a valid address.`, "MISSING_PARAMS");
-        const wei = wholeTokensToWei(p.amount ?? "0", label);
+        const wei = wholeTokensToWei(p.amount ?? "0", label, Number(p.decimals ?? "18"));
         contracts[nodeVar(n)] = {
           address: token,
           callData: compileCallData(label, { abi: ERC20_TRANSFER_ABI, functionName: "transfer", args: `${to}, ${wei}` }),
