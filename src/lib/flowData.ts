@@ -11,6 +11,7 @@
 import type { FlowNode } from "../data/services";
 import { getFieldsFor, fieldValue, fieldVisible } from "../data/fields";
 import { CHAIN_SELECTORS } from "../compiler/cre";
+import { resolvePath, resolveLeaf } from "./templateRefs";
 
 export type Json = Record<string, unknown>;
 export interface NodeIO {
@@ -107,7 +108,7 @@ export function sampleOutput(node: FlowNode): Json {
           ? { quote: "2998.42", mode: action, amountIn: p("amountIn"), limitPrice: p("limitPrice") }
           : { quote: "2998.42", expectedOut: "0.333 USDC per ETH", mode: action, amountIn: p("amountIn") };
     case "webhooks":
-      return { delivered: true, status: 200 };
+      return { delivered: true, status: 200, body: '{"ok":true}' };
     case "slack":
       return { ok: true, channel: p("channel") || "#general", message: p("message"), ts: "1726742400.000100" };
     case "discord":
@@ -173,26 +174,16 @@ export function sampleOutput(node: FlowNode): Json {
 
 const EXPR = /\{\{\s*([a-zA-Z0-9_-]+)\.([^}]+?)\s*\}\}/g;
 
-/** Look up "a.b.0.c" in a Json payload. */
-function lookup(payload: unknown, path: string): unknown {
-  let cur = payload;
-  for (const seg of path.split(".")) {
-    if (cur === null || cur === undefined) return undefined;
-    cur = (cur as Record<string, unknown>)[seg.trim()];
-  }
-  return cur;
-}
-
 /**
  * Resolve {{nodeId.path.to.field}} expressions in text against the io map.
+ * Uses the shared parse-on-descend resolver so a nested field of a JSON body
+ * (or any array/object) resolves the same way here and in the exported workflow.
  * Unknown references resolve to an empty string so a half-built flow still runs.
  */
 export function resolveExpressions(text: string, io: Record<string, NodeIO>): string {
-  return text.replace(EXPR, (_whole, nodeId: string, path: string) => {
-    const hit = lookup(io[nodeId]?.output, path);
-    if (hit === undefined || hit === null) return "";
-    return typeof hit === "object" ? JSON.stringify(hit) : String(hit);
-  });
+  return text.replace(EXPR, (_whole, nodeId: string, path: string) =>
+    resolveLeaf(resolvePath(io[nodeId]?.output, path))
+  );
 }
 
 /** Resolve expressions in every string param of a node (against current io). */

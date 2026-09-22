@@ -402,7 +402,7 @@ ${emitOutputsWrite(n, actionResult)}
       body = `  const ${v}_src = ${input}
   const ${v}_matches = ${v}_src.match(new RegExp(${JSON.stringify(pattern)}, "g")) ?? []
   const ${v} = ${v}_matches.join(", ")
-${emitOutputsWrite(n, [["action", JSON.stringify(n.action)], ["result", v], ["matches", `${v}_matches.join(", ")`]])}
+${emitOutputsWrite(n, [["action", JSON.stringify(n.action)], ["result", v], ["matches", `JSON.stringify(${v}_matches)`]])}
   result.push(${v})
   runtime.log("${n.id}: extract -> " + ${v}_matches.length + " match(es)")`;
       break;
@@ -475,7 +475,7 @@ ${emitOutputsWrite(n, [["action", JSON.stringify(n.action)], ["result", v], ["ma
         body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
   const ${v}Res = httpRequest(runtime, ${v}Url, ${JSON.stringify(method)}, {}, ${requestBody})
   runtime.log("${n.id}: webhook " + ${v}Res.status + " via ${method}")
-${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.status)`]])}`;
+${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.status)`], ["body", `${v}Res.body`]])}`;
         break;
       }
       // "Send a webhook" (aliases from saved flows: "Webhook response",
@@ -485,7 +485,7 @@ ${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.statu
       body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
   const ${v}Res = httpRequest(runtime, ${v}Url, "POST", {}, ${requestBody})
   runtime.log("${n.id}: webhook posted")
-${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.status)`]])}`;
+${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.status)`], ["body", `${v}Res.body`]])}`;
       break;
     }
     case "slack": {
@@ -832,9 +832,21 @@ function testCondition(input: string, operator: string, value: string): boolean 
   return input !== value
 }
 
-/** Resolve {{nodeId.key}} templates against the per-node outputs map (mirrors the in-app resolver). */
+/** Walk a dotted path, parsing a JSON string when a path descends into it (twin of src/lib/templateRefs.resolvePath). */
+const resolvePath = (root: unknown, path: string): unknown => {
+  let cur: unknown = root
+  for (const seg of path.split(".")) {
+    if (cur === null || cur === undefined) return undefined
+    if (typeof cur === "string") { try { cur = JSON.parse(cur) } catch { return undefined } }
+    cur = (cur as Record<string, unknown>)[seg.trim()]
+  }
+  return cur
+}
+const resolveLeaf = (v: unknown): string => (v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v))
+/** Resolve {{nodeId.field}} templates (nested + JSON-aware) against the per-node outputs map. */
 const resolveTemplate = (outputs: Record<string, Record<string, string>>, s: string): string =>
-  s.replace(/\\{\\{\\s*([a-zA-Z0-9_-]+)\\.([^}]+?)\\s*\\}\\}/g, (_m, id, key) => outputs[id]?.[key] ?? "")
+  s.replace(/\\{\\{\\s*([a-zA-Z0-9_-]+)\\.([^}]+?)\\s*\\}\\}/g, (_m, id: string, key: string) =>
+    outputs[id] === undefined ? "" : resolveLeaf(resolvePath(outputs[id], key)))
 ${guardrailHelper}
 const onCronTrigger = (runtime: Runtime<Config>): string => {
   const result: string[] = []
