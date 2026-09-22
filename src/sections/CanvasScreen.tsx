@@ -133,12 +133,16 @@ export default function CanvasScreen({
   const [wfName, setWfName] = useState("Untitled scenario");
   const [schedule, setSchedule] = useState("On demand");
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const wallet = isConnected && address ? `${address.slice(0, 6)}…${address.slice(-4)}` : null;
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; startX: number; startY: number; nodeX: number; nodeY: number; moved: boolean } | null>(null);
+  // One-finger pan of the canvas (empty-space drag). View-only translate: node
+  // positions stay in pan-independent canvas space, so drag/edges/clamp are unaffected.
+  const panRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const [undoStack, setUndoStack] = useState<{ nodes: FlowNode[]; edges: FlowEdge[] }[]>([]);
 
   const showToast = useCallback((text: string) => {
@@ -277,7 +281,7 @@ export default function CanvasScreen({
   // ---------- connections ----------
   const canvasPoint = (e: React.PointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
-    return { x: (e.clientX - (rect?.left ?? 0)) / zoom, y: (e.clientY - (rect?.top ?? 0)) / zoom };
+    return { x: (e.clientX - (rect?.left ?? 0) - pan.x) / zoom, y: (e.clientY - (rect?.top ?? 0) - pan.y) / zoom };
   };
 
   const nodeAtPoint = (x: number, y: number, excludeId?: string) =>
@@ -357,7 +361,11 @@ export default function CanvasScreen({
       return;
     }
     const d = dragRef.current;
-    if (!d) return;
+    if (!d) {
+      const pn = panRef.current;
+      if (pn) setPan({ x: pn.panX + (e.clientX - pn.x), y: pn.panY + (e.clientY - pn.y) });
+      return;
+    }
     const dx = (e.clientX - d.startX) / zoom;
     const dy = (e.clientY - d.startY) / zoom;
     if (!d.moved && Math.hypot(dx, dy) < 5) return;
@@ -823,10 +831,16 @@ export default function CanvasScreen({
           backgroundSize: "20px 20px",
           cursor: pendingEdge ? "crosshair" : undefined,
         }}
-        onPointerDown={() => setSelectedEdge(null)}
+        onPointerDown={(e) => {
+          setSelectedEdge(null);
+          if (dragRef.current || pendingEdge) return;
+          panRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+          canvasRef.current?.setPointerCapture?.(e.pointerId);
+        }}
         onPointerMove={onPointerMove}
         onPointerUp={() => {
           dragRef.current = null;
+          panRef.current = null;
           finishConnect();
         }}
       >
@@ -835,7 +849,7 @@ export default function CanvasScreen({
           style={{
             width: `${100 / zoom}%`,
             height: `${100 / zoom}%`,
-            transform: `scale(${zoom})`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             transformOrigin: "0 0",
           }}
         >

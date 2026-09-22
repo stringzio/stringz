@@ -57,9 +57,6 @@ function Nav() {
         <a href="#how" className="transition hover:text-[#171717]">
           How it works
         </a>
-        <a href="#pricing" className="transition hover:text-[#171717]">
-          Pricing
-        </a>
         <a href="#faq" className="transition hover:text-[#171717]">
           FAQ
         </a>
@@ -974,6 +971,9 @@ function Footer() {
 
 /* ---------------- page ---------------- */
 
+// Pricing is temporarily hidden pre-launch; flip to true to restore the section.
+const SHOW_PRICING = false;
+
 export default function Landing() {
   return (
     <div className="min-h-screen bg-[#F2F2EF] font-sans text-[#171717] antialiased">
@@ -983,7 +983,7 @@ export default function Landing() {
       <StatsRow />
       <Features />
       <Steps />
-      <Pricing />
+      {SHOW_PRICING && <Pricing />}
       <Testimonials />
       <FinalCta />
       <Footer />

@@ -4,7 +4,7 @@ import { Signal, Wifi, BatteryFull } from "lucide-react";
 export default function PhoneFrame({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center p-0 sm:p-6"
+      className="min-h-[100dvh] w-full flex items-center justify-center p-0 sm:p-6"
       style={{
         background: "linear-gradient(160deg, #cfe0d1 0%, #c4d8c8 45%, #b9d0bf 100%)",
       }}
