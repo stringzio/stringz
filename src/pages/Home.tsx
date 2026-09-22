@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import PhoneFrame from "../components/PhoneFrame";
 import DesktopSidebar from "../components/DesktopSidebar";
 import FullLoader from "../components/FullLoader";
+import MobileCanvasGate from "../components/MobileCanvasGate";
 import CanvasScreen from "../sections/CanvasScreen";
 import TemplatesScreen from "../sections/TemplatesScreen";
 import OrgScreen from "../sections/OrgScreen";
@@ -18,6 +19,7 @@ export default function Home() {
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [screen, setScreen] = useState<Screen>("canvas");
   const [scenarioKey, setScenarioKey] = useState(1);
+  const [builderAck, setBuilderAck] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const navigate = useNavigate();
   // undefined = still checking; null = signed out; PublicUser = signed in.
@@ -98,5 +100,13 @@ export default function Home() {
     );
   }
 
-  return <PhoneFrame>{content(false)}</PhoneFrame>;
+  return (
+    <PhoneFrame>
+      {screen === "canvas" && !builderAck ? (
+        <MobileCanvasGate onContinue={() => setBuilderAck(true)} />
+      ) : (
+        content(false)
+      )}
+    </PhoneFrame>
+  );
 }
