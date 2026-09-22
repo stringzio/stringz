@@ -3,6 +3,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { SERVICES } from "../data/services";
 import type { FlowNode } from "../data/services";
 import type { Json } from "../lib/flowData";
+import { TEMPLATE_RE } from "../lib/templateRefs";
 
 /** What a `{{nodeId.field}}` token resolves to, for the hover popover. */
 export interface RefInfo {
@@ -11,10 +12,11 @@ export interface RefInfo {
 }
 
 /**
- * The same token grammar the runtime resolver uses (flowData.ts EXPR) so the
- * highlight and the actual substitution never disagree: {{nodeId.path.to.field}}.
+ * The shared `{{nodeId.field}}` grammar (single source of truth in templateRefs),
+ * so the highlight and the actual substitution never disagree. A fresh instance
+ * keeps this component's stateful `.exec` loop isolated from other consumers.
  */
-const TOKEN_RE = /\{\{\s*([a-zA-Z0-9_-]+)\.([^}]+?)\s*\}\}/g;
+const TOKEN_RE = new RegExp(TEMPLATE_RE.source, "g");
 
 type Segment =
   | { kind: "text"; text: string }

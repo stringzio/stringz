@@ -436,7 +436,7 @@ ${emitOutputsWrite(n, [["action", JSON.stringify(n.action)], ["result", v], ["ma
       if (secret) {
         lines.push(`  const ${v}Token = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value`);
         const scheme = p.authScheme ?? "Bearer token";
-        if (scheme === "Basic token") lines.push(`  ${v}Headers["authorization"] = "Basic " + ${v}Token`);
+        if (scheme === "Basic token") lines.push(`  ${v}Headers["authorization"] = "Basic " + bytesToBase64(new TextEncoder().encode(${v}Token))`);
         else if (scheme === "Custom header") lines.push(`  ${v}Headers[${JSON.stringify(p.authHeader || "Authorization")}] = ${v}Token`);
         else lines.push(`  ${v}Headers["authorization"] = "Bearer " + ${v}Token`);
       }

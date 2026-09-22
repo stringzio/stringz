@@ -418,7 +418,7 @@ export default function CanvasScreen({
     // front and reveal stepwise, so every node carries its real input/output
     // when the animation lands. Failed reads fall back to samples.
     void collectRunOverrides(nodes).then(({ overrides, liveCount }) => {
-      const { io, provenance, errors } = executeRun(nodes, runSequence.map((s) => s.node), pinned, overrides);
+      const { io, provenance, errors, haltedBy } = executeRun(nodes, runSequence.map((s) => s.node), pinned, overrides);
       setRunErrors(errors);
       // Stats feed: local log always; server row too when signed in. Neither
       // blocks the run. A run with errored modules is a "failed" run.
@@ -445,14 +445,20 @@ export default function CanvasScreen({
           const failedNames = Object.keys(errors)
             .map((id) => SERVICES[nodes.find((n) => n.id === id)?.service ?? "webhooks"].name)
             .filter((v, idx, a) => a.indexOf(v) === idx);
+          // A gate halted the flow - say so instead of "Run completed", so a
+          // deliberate stop isn't mistaken for a full run.
+          const haltName = haltedBy ? SERVICES[nodes.find((n) => n.id === haltedBy)?.service ?? "flow-control"].name : "";
+          const haltNote = haltedBy ? (io[haltedBy]?.output as Record<string, unknown>)?.note : undefined;
           showToast(
             failedNames.length
               ? `${failedNames.join(", ")} need your .env keys - marked red` +
                   (simulated ? `, ${simulated} simulated` : "")
-              : `Run completed - ${runSequence.length} modules` +
-                  (liveCount ? `, ${liveCount} live on-chain` : "") +
-                  (simulated ? `, ${simulated} simulated` : "") +
-                  ", data attached"
+              : haltedBy
+                ? `Flow halted at ${haltName}${haltNote ? ` - ${haltNote}` : ""}`
+                : `Run completed - ${runSequence.length} modules` +
+                    (liveCount ? `, ${liveCount} live on-chain` : "") +
+                    (simulated ? `, ${simulated} simulated` : "") +
+                    ", data attached"
           );
           return;
         }
