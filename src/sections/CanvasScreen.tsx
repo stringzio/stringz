@@ -108,8 +108,24 @@ export default function CanvasScreen({
   /** Signed-out boots skip the server flow list entirely (it would 401). */
   signedIn?: boolean;
 }) {
-  const [nodes, setNodes] = useState<FlowNode[]>(INITIAL_NODES);
-  const [edges, setEdges] = useState<FlowEdge[]>(INITIAL_EDGES);
+  // A flow handed over from the templates screen (a template's "Start" or the
+  // blank "+"). Read once and clear, so a later remount without a seed restores
+  // normally. JSON round-trip means the canvas edits a copy, never the template.
+  const [pending] = useState<{ name: string; nodes: FlowNode[]; edges: FlowEdge[] } | null>(() => {
+    try {
+      const raw = sessionStorage.getItem("stringz:pending-flow");
+      if (raw) {
+        sessionStorage.removeItem("stringz:pending-flow");
+        const p = JSON.parse(raw);
+        if (p && Array.isArray(p.nodes)) return p;
+      }
+    } catch {
+      /* sessionStorage unavailable - fall through to the default boot */
+    }
+    return null;
+  });
+  const [nodes, setNodes] = useState<FlowNode[]>(pending?.nodes ?? INITIAL_NODES);
+  const [edges, setEdges] = useState<FlowEdge[]>(pending?.edges ?? INITIAL_EDGES);
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<FlowEdge | null>(null);
   const [topNode, setTopNode] = useState<string | null>(null);
@@ -130,7 +146,7 @@ export default function CanvasScreen({
    *  canvas-centered toolbar (Add pill + 7 buttons) never meets it. */
   const wide = useMediaQuery("(min-width: 1760px)");
   const labeled = desktop && wide;
-  const [wfName, setWfName] = useState("Untitled scenario");
+  const [wfName, setWfName] = useState(pending?.name ?? "Untitled scenario");
   const [schedule, setSchedule] = useState("On demand");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -164,6 +180,8 @@ export default function CanvasScreen({
   // "draft-clean" is a one-shot flag: whoever applies flow content sets it so
   // the draft writer below persists the first snapshot as clean, not dirty.
   const [hydrated, setHydrated] = useState(() => {
+    // A seeded flow (template/blank) is already in state - don't restore over it.
+    if (pending) return true;
     if (sessionStorage.getItem("stringz:skip-restore")) {
       sessionStorage.removeItem("stringz:skip-restore");
       return true;

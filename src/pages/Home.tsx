@@ -12,6 +12,7 @@ import StatsScreen from "../sections/StatsScreen";
 import SettingsScreen from "../sections/SettingsScreen";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { api } from "../lib/api";
+import type { FlowNode, FlowEdge } from "../data/services";
 import type { PublicUser } from "../lib/contract";
 import type { Screen } from "../types";
 
@@ -56,6 +57,20 @@ export default function Home() {
     setScreen("canvas");
   };
 
+  // Open a flow on the canvas: a template's graph, or a blank starter from the
+  // templates screen. We stash it for the canvas to pick up on its next boot,
+  // then remount the canvas so its hydration reads the seed instead of restoring.
+  const openTemplate = (name: string, nodes: FlowNode[], edges: FlowEdge[]) => {
+    try {
+      sessionStorage.setItem("stringz:pending-flow", JSON.stringify({ name, nodes, edges }));
+    } catch {
+      // sessionStorage unavailable - the canvas will just boot to its default.
+    }
+    setScenarioKey((k) => k + 1);
+    setNotice(name === "Untitled scenario" ? "New blank flow created" : `Opened "${name}"`);
+    setScreen("canvas");
+  };
+
   const content = (desktop: boolean) => (
     <AnimatePresence mode="wait">
       <motion.div
@@ -76,7 +91,9 @@ export default function Home() {
             onNewScenario={newScenario}
           />
         )}
-        {screen === "templates" && <TemplatesScreen desktop={desktop} onBack={() => setScreen("canvas")} />}
+        {screen === "templates" && (
+          <TemplatesScreen desktop={desktop} onBack={() => setScreen("canvas")} onStart={openTemplate} />
+        )}
         {screen === "org" && (
           <OrgScreen
             desktop={desktop}
