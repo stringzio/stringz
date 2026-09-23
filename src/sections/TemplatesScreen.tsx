@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronLeft, Search, Play, Plus } from "lucide-react";
+import { ChevronLeft, Search, Play, Plus, Lock } from "lucide-react";
 import { SERVICES, type ServiceId } from "../data/services";
 import Toast, { type ToastData } from "../components/Toast";
 
@@ -104,9 +104,8 @@ export default function TemplatesScreen({ desktop = false, onBack }: { desktop?:
           </button>
         </div>
 
-        <h1 className="mt-5 text-[27px] font-medium leading-[1.2] tracking-tight text-[#1a1a1a]">
-          Start <span className="font-extrabold">Automating</span> in Minutes{" "}
-          <span className="font-extrabold">with Ready-Made Templates</span>
+        <h1 className="mt-5 text-[27px] font-extrabold leading-[1.2] tracking-tight text-[#1a1a1a]">
+          Start automating in minutes with ready-made templates
         </h1>
 
         <div className="mt-4 flex gap-2">
@@ -137,47 +136,59 @@ export default function TemplatesScreen({ desktop = false, onBack }: { desktop?:
 
       {/* cards */}
       <div className="no-scrollbar h-full overflow-y-auto px-5 pb-24 pt-[272px]">
-        {filtered.map((t, i) => (
-          <motion.div
-            key={t.title}
-            initial={{ opacity: 0, y: 26 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.06 * i, type: "spring", damping: 26, stiffness: 260 }}
-            className="mb-4 flex gap-4 rounded-[28px] p-5 ring-1 ring-black/[0.05]"
-            style={{ backgroundColor: t.tint, border: t.tint === "#FFFFFF" ? "1px solid #eee" : "none" }}
-          >
-            <div className="flex flex-col items-center gap-2 pt-1">
-              {t.services.slice(0, 3).map((sid) => (
-                <div
-                  key={sid}
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-sm [&>svg]:h-[22px] [&>svg]:w-[22px]"
-                >
-                  {SERVICES[sid].icon}
+        <div className={`mx-auto max-w-5xl ${desktop ? "grid grid-cols-2 gap-4" : "flex flex-col gap-4"}`}>
+          {filtered.map((t, i) => (
+            <motion.div
+              key={t.title}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.04 * i, duration: 0.28, ease: "easeOut" }}
+              className="flex flex-col rounded-[24px] p-5 ring-1 ring-black/[0.06]"
+              style={{ backgroundColor: t.tint === "#FFFFFF" ? "#fff" : t.tint }}
+            >
+              {/* flow preview: the template's services, left to right, as they run */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  {t.services.slice(0, 3).map((sid, idx) => (
+                    <div key={sid} className="flex items-center">
+                      {idx > 0 && <span className="mx-1.5 h-px w-3.5 bg-black/15" />}
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-black/[0.04] [&>svg]:h-5 [&>svg]:w-5">
+                        {SERVICES[sid].icon}
+                      </div>
+                    </div>
+                  ))}
+                  {t.extra > 0 && (
+                    <>
+                      <span className="mx-1.5 h-px w-3.5 bg-black/15" />
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/60 text-[12px] font-bold text-gray-500 ring-1 ring-black/[0.04]">
+                        +{t.extra}
+                      </div>
+                    </>
+                  )}
                 </div>
-              ))}
-              {t.extra > 0 && (
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[13px] font-bold text-[#1a1a1a] shadow-sm">
-                  +{t.extra}
-                </div>
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <h3 className="text-[16px] font-extrabold leading-snug text-[#1a1a1a]">{t.title}</h3>
-              <p className="mt-1.5 text-[12px] leading-relaxed text-gray-500">{t.desc}</p>
-              <div className="mt-3.5 flex items-center justify-between">
-                <span className="rounded-full border border-dashed border-gray-300 px-3 py-1.5 text-[10.5px] font-semibold text-gray-500">
+                <span className="flex items-center gap-1 rounded-full bg-white/70 px-2.5 py-1 text-[10.5px] font-semibold text-gray-500">
+                  {t.visibility === "private" && <Lock size={10} strokeWidth={2.5} />}
+                  {t.visibility === "private" ? "Private" : "Public"}
+                </span>
+              </div>
+
+              <h3 className="mt-4 text-[16px] font-extrabold leading-snug text-[#1a1a1a]">{t.title}</h3>
+              <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-relaxed text-gray-500">{t.desc}</p>
+
+              <div className="mt-auto flex items-center justify-between border-t border-black/[0.06] pt-3.5">
+                <span className="text-[11px] font-semibold text-gray-500">
                   {t.services.length + t.extra} module{t.services.length + t.extra === 1 ? "" : "s"}
                 </span>
                 <button
                   onClick={() => showToast("Template added to your scenarios")}
-                  className="flex items-center gap-2 rounded-full bg-[#1a1a1a] py-2 pl-5 pr-4 text-[13px] font-semibold text-white transition active:scale-95"
+                  className="flex items-center gap-1.5 rounded-full bg-[#1a1a1a] py-2 pl-4 pr-3.5 text-[12.5px] font-semibold text-white transition hover:bg-black active:scale-95"
                 >
-                  Start <Play size={12} fill="currentColor" />
+                  Start <Play size={11} fill="currentColor" />
                 </button>
               </div>
-            </div>
-          </motion.div>
-        ))}
+            </motion.div>
+          ))}
+        </div>
         {filtered.length === 0 && (
           <div className="mt-20 text-center text-[13px] font-medium text-[#4b6053]">
             No templates match “{query}”
