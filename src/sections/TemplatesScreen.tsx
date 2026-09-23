@@ -116,7 +116,7 @@ export default function TemplatesScreen({ desktop = false, onBack }: { desktop?:
             </h1>
 
             {/* filters + search: one row on desktop, stacked on mobile */}
-            <div className={`mt-4 flex gap-3 ${desktop ? "items-center" : "flex-col"}`}>
+            <div className={`mt-4 flex gap-3 ${desktop ? "items-center justify-between" : "flex-col"}`}>
               <div className="flex shrink-0 gap-2">
                 {FILTERS.map((f) => (
                   <button
@@ -136,7 +136,7 @@ export default function TemplatesScreen({ desktop = false, onBack }: { desktop?:
 
               <div
                 className={`flex items-center gap-2 rounded-full bg-white/90 px-4 py-3 shadow-sm ring-1 ring-black/[0.04] ${
-                  desktop ? "flex-1" : ""
+                  desktop ? "w-72" : ""
                 }`}
               >
                 <Search size={16} className="text-gray-400" />
