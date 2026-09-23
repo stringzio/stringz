@@ -81,61 +81,78 @@ export default function TemplatesScreen({ desktop = false, onBack }: { desktop?:
       (t.title + t.desc).toLowerCase().includes(query.toLowerCase())
   );
 
+  const dots = {
+    backgroundImage: "radial-gradient(#dfe5df 1.3px, transparent 1.3px)",
+    backgroundSize: "20px 20px",
+  };
+
   return (
-    <div className="relative h-full w-full overflow-hidden" style={{ background: "#C6DACA" }}>
-      {/* header - solid bg so scrolled cards never show through */}
-      <div className="absolute inset-x-0 top-0 z-20 bg-[#C6DACA] px-5 pt-14">
-        <div className="flex items-center justify-between">
-          {!desktop && (
-            <button
-              onClick={onBack}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#1a1a1a] text-white shadow-md transition active:scale-95"
-              aria-label="Back to canvas"
-            >
-              <ChevronLeft size={19} />
-            </button>
-          )}
-          <button
-            onClick={() => showToast("Start from a blank template")}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-md transition active:scale-95"
-            aria-label="New template"
-          >
-            <Plus size={18} className="text-[#1a1a1a]" />
-          </button>
+    <div className="relative h-full w-full overflow-hidden bg-white" style={dots}>
+      <div className="no-scrollbar h-full overflow-y-auto pb-24">
+        {/* sticky header - opaque dotted surface so scrolled cards never show through */}
+        <div className="sticky top-0 z-20 bg-white px-5 pt-14 pb-4" style={dots}>
+          <div className="mx-auto max-w-5xl">
+            <div className="flex items-center justify-between">
+              {!desktop && (
+                <button
+                  onClick={onBack}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-[#1a1a1a] text-white shadow-md transition active:scale-95"
+                  aria-label="Back to canvas"
+                >
+                  <ChevronLeft size={19} />
+                </button>
+              )}
+              <button
+                onClick={() => showToast("Start from a blank template")}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-md ring-1 ring-black/[0.04] transition active:scale-95"
+                aria-label="New template"
+              >
+                <Plus size={18} className="text-[#1a1a1a]" />
+              </button>
+            </div>
+
+            <h1 className="mt-5 text-[27px] font-extrabold leading-[1.2] tracking-tight text-[#1a1a1a]">
+              Start automating in minutes with ready-made templates
+            </h1>
+
+            {/* filters + search: one row on desktop, stacked on mobile */}
+            <div className={`mt-4 flex gap-3 ${desktop ? "items-center" : "flex-col"}`}>
+              <div className="flex shrink-0 gap-2">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className={`rounded-full px-4 py-2 text-[12.5px] font-semibold transition ${
+                      filter === f.key
+                        ? "bg-[#1a1a1a] text-white"
+                        : "bg-white/80 text-gray-500 ring-1 ring-black/[0.04]"
+                    }`}
+                  >
+                    {f.label}{" "}
+                    <span className={filter === f.key ? "text-gray-300" : "text-gray-400"}>{filterCount(f.key)}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div
+                className={`flex items-center gap-2 rounded-full bg-white/90 px-4 py-3 shadow-sm ring-1 ring-black/[0.04] ${
+                  desktop ? "flex-1" : ""
+                }`}
+              >
+                <Search size={16} className="text-gray-400" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search automations…"
+                  className="w-full bg-transparent text-[13.5px] font-medium text-[#1a1a1a] outline-none placeholder:text-gray-400"
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
-        <h1 className="mt-5 text-[27px] font-extrabold leading-[1.2] tracking-tight text-[#1a1a1a]">
-          Start automating in minutes with ready-made templates
-        </h1>
-
-        <div className="mt-4 flex gap-2">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`rounded-full px-4 py-2 text-[12.5px] font-semibold transition ${
-                filter === f.key ? "bg-[#1a1a1a] text-white" : "bg-white/80 text-gray-500"
-              }`}
-            >
-              {f.label}{" "}
-              <span className={filter === f.key ? "text-gray-300" : "text-gray-400"}>{filterCount(f.key)}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-3 flex items-center gap-2 rounded-full bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
-          <Search size={16} className="text-gray-400" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search automations…"
-            className="w-full bg-transparent text-[13.5px] font-medium text-[#1a1a1a] outline-none placeholder:text-gray-400"
-          />
-        </div>
-      </div>
-
-      {/* cards */}
-      <div className="no-scrollbar h-full overflow-y-auto px-5 pb-24 pt-[272px]">
+        {/* cards */}
+        <div className="px-5 pt-2">
         <div className={`mx-auto max-w-5xl ${desktop ? "grid grid-cols-2 gap-4" : "flex flex-col gap-4"}`}>
           {filtered.map((t, i) => (
             <motion.div
@@ -194,6 +211,7 @@ export default function TemplatesScreen({ desktop = false, onBack }: { desktop?:
             No templates match “{query}”
           </div>
         )}
+        </div>
       </div>
 
       <Toast toast={toast} />
