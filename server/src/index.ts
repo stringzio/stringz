@@ -84,6 +84,10 @@ const port = Number(process.env.SERVER_PORT ?? 8787);
 if (process.env.STATIC_DIR) {
   const { serveStatic } = await import("@hono/node-server/serve-static");
   app.use("/assets/*", serveStatic({ root: process.env.STATIC_DIR }));
+  // Top-level public files (favicon.svg, robots.txt, og images, ...). serveStatic
+  // calls next() when no file matches, so client routes still reach the SPA
+  // fallback below instead of 404ing.
+  app.use("/*", serveStatic({ root: process.env.STATIC_DIR }));
   app.get("*", serveStatic({ path: `${process.env.STATIC_DIR}/index.html` }));
 }
 
