@@ -114,24 +114,13 @@ export default function Waitlist() {
 
   return (
     <div className="min-h-screen bg-white font-sans text-[#171717] antialiased">
-      {/* nav */}
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-6 pt-7">
+      {/* nav - kept minimal on the waitlist page: logo only */}
+      <header className="mx-auto flex max-w-6xl items-center px-6 pt-7">
         <Link to="/" className="flex items-center gap-2.5" aria-label="Back to Stringz home">
           <span className="flex h-9 w-9 items-center justify-center rounded-[12px] bg-[#171717]">
             <LogoMark className="h-5 w-auto" />
           </span>
           <span className="text-[19px] font-extrabold tracking-tight">Stringz</span>
-        </Link>
-        <nav className="hidden items-center gap-9 text-[14.5px] font-medium text-[#3c3c3c] md:flex">
-          <Link to="/" className="transition hover:text-[#171717]">Home</Link>
-          <a href="#how" className="transition hover:text-[#171717]">How it works</a>
-          <Link to="/auth" className="transition hover:text-[#171717]">Sign in</Link>
-        </nav>
-        <Link
-          to="/auth"
-          className="rounded-full border-2 border-[#171717] px-5 py-2.5 text-[13px] font-bold transition hover:bg-[#171717] hover:text-white active:scale-95"
-        >
-          Get a demo
         </Link>
       </header>
 

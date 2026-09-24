@@ -13,6 +13,7 @@ import BrandLogo from "../components/BrandLogo";
 import LogoMark from "../components/LogoMark";
 import { SERVICES } from "../data/services";
 import { api } from "../lib/api";
+import Toast, { type ToastData } from "../components/Toast";
 
 /* ---------------- helpers ---------------- */
 
@@ -56,9 +57,6 @@ function Nav() {
         </a>
         <a href="#how" className="transition hover:text-[#171717]">
           How it works
-        </a>
-        <a href="#faq" className="transition hover:text-[#171717]">
-          FAQ
         </a>
       </nav>
       <Link
@@ -112,17 +110,17 @@ function Hero() {
         </motion.p>
         <motion.div
           {...fadeUp(0.18)}
-          className="mt-8 flex items-center justify-center gap-3"
+          className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center"
         >
           <Link
             to="/waitlist"
-            className="flex items-center gap-2 rounded-full bg-[#171717] px-7 py-3.5 text-[14px] font-semibold text-white transition hover:scale-[1.02] active:scale-95"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-[#171717] px-7 py-3.5 text-[14px] font-semibold text-white transition hover:scale-[1.02] active:scale-95 sm:w-auto"
           >
             Join the waitlist <ArrowRight size={15} />
           </Link>
           <Link
-            to="/app"
-            className="flex items-center gap-2 rounded-full bg-white px-7 py-3.5 text-[14px] font-semibold text-[#171717] shadow-sm ring-1 ring-black/5 transition hover:scale-[1.02] active:scale-95"
+            to="/auth"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-white px-7 py-3.5 text-[14px] font-semibold text-[#171717] shadow-sm ring-1 ring-black/5 transition hover:scale-[1.02] active:scale-95 sm:w-auto"
           >
             Try the demo <ArrowUpRight size={15} />
           </Link>
@@ -842,17 +840,17 @@ function FinalCta() {
       </motion.p>
       <motion.div
         {...fadeUp(0.16)}
-        className="relative mt-8 flex items-center justify-center gap-3"
+        className="relative mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center"
       >
         <Link
           to="/waitlist"
-          className="flex items-center gap-2 rounded-full bg-[#171717] px-7 py-3.5 text-[14px] font-semibold text-white transition hover:scale-[1.02] active:scale-95"
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-[#171717] px-7 py-3.5 text-[14px] font-semibold text-white transition hover:scale-[1.02] active:scale-95 sm:w-auto"
         >
           Join the waitlist <ArrowRight size={15} />
         </Link>
         <Link
-          to="/app"
-          className="flex items-center gap-2 rounded-full bg-white px-7 py-3.5 text-[14px] font-semibold text-[#171717] shadow-sm ring-1 ring-black/10 transition hover:scale-[1.02] active:scale-95"
+          to="/auth"
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-white px-7 py-3.5 text-[14px] font-semibold text-[#171717] shadow-sm ring-1 ring-black/10 transition hover:scale-[1.02] active:scale-95 sm:w-auto"
         >
           Try the demo <ArrowUpRight size={15} />
         </Link>
@@ -863,9 +861,14 @@ function FinalCta() {
 
 function Footer() {
   const [email, setEmail] = useState("");
-  const [subscribed, setSubscribed] = useState(false);
+  const [toast, setToast] = useState<ToastData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const showToast = (text: string) => {
+    setToast({ id: Date.now(), text });
+    setTimeout(() => setToast(null), 2600);
+  };
   const cols = [
     {
       h: "Product",
@@ -874,13 +877,7 @@ function Footer() {
     { h: "Company", links: ["About us", "Careers", "Blog", "Contact"] },
     {
       h: "Support",
-      links: [
-        "Help center",
-        "FAQs",
-        "Privacy policy",
-        "Terms of service",
-        "Community",
-      ],
+      links: ["Help center", "Privacy policy", "Terms of service", "Community"],
     },
   ];
   return (
@@ -895,12 +892,13 @@ function Footer() {
               className="mt-6 flex items-center gap-2 rounded-full bg-white p-1.5 ring-1 ring-black/10"
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (!email.includes("@") || saving || subscribed) return;
+                if (!email.includes("@") || saving) return;
                 setSaving(true);
                 setError(null);
                 try {
                   await api.newsletter.subscribe({ email });
-                  setSubscribed(true);
+                  setEmail("");
+                  showToast("You're subscribed — we'll keep you posted.");
                 } catch {
                   setError(
                     "Couldn't subscribe - check the server is running and try again.",
@@ -922,7 +920,7 @@ function Footer() {
                 disabled={saving}
                 className="shrink-0 rounded-full bg-[#171717] px-5 py-2.5 text-[12.5px] font-bold text-white transition active:scale-95 disabled:opacity-60"
               >
-                {subscribed ? "Subscribed ✓" : saving ? "Saving…" : "Subscribe"}
+                {saving ? "Saving…" : "Subscribe"}
               </button>
             </form>
             <p className="mt-3 text-[10.5px] text-[#9a9a93]">
@@ -965,6 +963,7 @@ function Footer() {
           </span>
         </div>
       </div>
+      <Toast toast={toast} />
     </footer>
   );
 }
@@ -973,6 +972,9 @@ function Footer() {
 
 // Pricing is temporarily hidden pre-launch; flip to true to restore the section.
 const SHOW_PRICING = false;
+// Testimonials are placeholder copy today. Flip to true once we have real
+// user feedback to show.
+const SHOW_TESTIMONIALS = false;
 
 export default function Landing() {
   return (
@@ -984,7 +986,8 @@ export default function Landing() {
       <Features />
       <Steps />
       {SHOW_PRICING && <Pricing />}
-      <Testimonials />
+      {/* Testimonials hidden until we have real feedback - re-enable when ready */}
+      {SHOW_TESTIMONIALS && <Testimonials />}
       <FinalCta />
       <Footer />
     </div>
