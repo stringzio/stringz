@@ -86,7 +86,7 @@ export const TEMPLATES: Template[] = [
       { id: "log-gate", service: "flow-control", action: "Check & log", params: { value: "ETH/USD" } },
       {
         id: "sweep-usdc", service: "token-transfer", action: "Send ERC-20", chain: "ethereum",
-        params: { tokenAddress: USDC, toAddress: VITALIK, amount: "25" },
+        params: { tokenAddress: USDC, toAddress: VITALIK, amount: "25", decimals: "6" },
       },
     ]),
     tint: "#FBE9EF",
@@ -99,7 +99,7 @@ export const TEMPLATES: Template[] = [
       { id: "go", service: "trigger", action: "On demand" },
       {
         id: "send-usdc", service: "token-transfer", action: "Send ERC-20", chain: "ethereum",
-        params: { tokenAddress: USDC, toAddress: VITALIK, amount: "100" },
+        params: { tokenAddress: USDC, toAddress: VITALIK, amount: "100", decimals: "6" },
       },
       {
         id: "slack-receipt", service: "slack", action: "Send a message",
