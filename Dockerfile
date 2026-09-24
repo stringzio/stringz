@@ -5,10 +5,13 @@
 # ---- web build ----
 FROM oven/bun:1 AS web
 WORKDIR /repo
-# Public WalletConnect project id - baked into the browser bundle by design
-# (override at build time with --build-arg if it ever needs rotating).
-ARG VITE_WC_PROJECT_ID=aff5e013faa10a86e4ff8dec4982a6ef
+# Public WalletConnect project id - baked into the browser bundle by design.
+# Pass it at build time: --build-arg VITE_WC_PROJECT_ID=...
+# (No default here: the value is attribution-sensitive and must not live in
+# the public repo. The build fails loudly if it is omitted.)
+ARG VITE_WC_PROJECT_ID
 ENV VITE_WC_PROJECT_ID=$VITE_WC_PROJECT_ID
+RUN test -n "$VITE_WC_PROJECT_ID" || (echo "ERROR: VITE_WC_PROJECT_ID build arg is required (see .env.example)" && exit 1)
 COPY package.json bun.lock ./
 COPY server/package.json server/
 RUN bun install --frozen-lockfile
