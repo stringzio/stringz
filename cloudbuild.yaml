@@ -1,0 +1,21 @@
+# Cloud Build config for the flowkit-api image.
+# Invoked by .github/workflows/ci.yml (deploy job) and manually per INFRA.md.
+# VITE_WC_PROJECT_ID is a public client-side config value (it ships in the
+# browser bundle) - a build arg is appropriate. Never pass real secrets here;
+# the runtime gets them from Secret Manager via the Cloud Run deploy flags.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_IMAGE_TAG}
+      - --build-arg
+      - VITE_WC_PROJECT_ID=${_VITE_WC_PROJECT_ID}
+      - .
+
+images:
+  - ${_IMAGE_TAG}
+
+substitutions:
+  _IMAGE_TAG: required
+  _VITE_WC_PROJECT_ID: required
