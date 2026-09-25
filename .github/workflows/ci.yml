@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets us dry-run the deploy from a branch before merging the workflow.
+  workflow_dispatch:
 
 jobs:
   quality:
@@ -57,3 +59,50 @@ jobs:
           echo "api did not come up"; exit 1
       - name: Browser check
         run: node scripts/browser-check.mjs
+
+  # Auto-deploy to Cloud Run on every merge to main, after quality passes.
+  # Auth is Workload Identity Federation (OIDC) - no GCP keys in GitHub.
+  # workflow_dispatch is a no-infra-change dry run: it exercises the exact
+  # same build+deploy path from a branch before merge.
+  deploy:
+    needs: quality
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_TAG: us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/flowkit/api:sha-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Build and push image
+        run: |
+          gcloud builds submit --tag "$IMAGE_TAG" \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --build-arg VITE_WC_PROJECT_ID=${{ secrets.VITE_WC_PROJECT_ID }} \
+            --quiet
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy flowkit-api --image "$IMAGE_TAG" \
+            --region=${{ vars.GCP_REGION }} \
+            --service-account=flowkit-api-run@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --add-cloudsql-instances=${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:flowkit-db \
+            --set-secrets=DATABASE_URL=flowkit-database-url-internal:latest,GITHUB_CLIENT_SECRET=flowkit-github-secret:latest \
+            --set-env-vars=NODE_ENV=production,SERVER_PORT=8080,GITHUB_CLIENT_ID=${{ vars.GH_OAUTH_CLIENT_ID }},PUBLIC_APP_URL=${{ vars.PUBLIC_APP_URL }} \
+            --memory=512Mi --cpu=1 --concurrency=40 --min-instances=0 --max-instances=10 \
+            --allow-unauthenticated --project=${{ vars.GCP_PROJECT_ID }} --quiet
+      - name: Wait for health
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf "${{ vars.PUBLIC_APP_URL }}/api/health" && exit 0
+            sleep 5
+          done
+          echo "deployed service did not become healthy"; exit 1

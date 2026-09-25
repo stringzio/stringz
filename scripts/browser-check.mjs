@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import fs from "node:fs";
 
-const BASE = process.env.BASE_URL || "http://localhost:3000";
+const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const SHOTS = "tmp-verify/shots";
 fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -223,6 +223,31 @@ for (const [w, h, label] of [[390, 844, "phone"]]) {
   await page.locator('[aria-label="Connect from Price Feed"]').first().waitFor({ timeout: 15000 });
   await page.screenshot({ path: `${SHOTS}/11-app-${label}.png` });
   check(`mobile (${label}): no console errors`, consoleErrors.length === 0, consoleErrors.join(" | "));
+  consoleErrors = [];
+  await ctx.close();
+}
+
+// ── E. Templates screen (all templates must export with zero edits) ─────────
+{
+  const { ctx, page } = await newPage({ width: 1440, height: 900 });
+  await page.goto(`${BASE}/app`, { waitUntil: "networkidle" });
+  await page.locator('[aria-label="Connect from Price Feed"]').first().waitFor({ timeout: 15000 });
+  await page.getByLabel("Templates", { exact: true }).click();
+  await page.getByText("Start automating in minutes", { exact: false }).waitFor({ timeout: 10000 });
+  const cards = await page.locator("h3").count();
+  check("templates: cards render", cards >= 5, `${cards} cards`);
+  await page.screenshot({ path: `${SHOTS}/12-templates.png`, fullPage: true });
+
+  // open the first template ("Ping Discord ...") and land on the seeded canvas
+  await page.getByRole("button", { name: "Start", exact: true }).first().click();
+  check("templates: opened notice", await toastText(page, /Opened "/));
+  const seeded = page.locator(".text-\\[12\\.5px\\]");
+  await seeded.filter({ hasText: "Price Feed" }).first().waitFor({ timeout: 10000 });
+  await seeded.filter({ hasText: "Text Parser" }).first().waitFor({ timeout: 10000 });
+  await seeded.filter({ hasText: "Discord" }).first().waitFor({ timeout: 10000 });
+  check("templates: seeded nodes on canvas", true);
+  await page.screenshot({ path: `${SHOTS}/13-template-opened.png` });
+  check("templates: no console errors", consoleErrors.length === 0, consoleErrors.join(" | "));
   consoleErrors = [];
   await ctx.close();
 }

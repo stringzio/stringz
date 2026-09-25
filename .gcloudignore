@@ -1,0 +1,12 @@
+# What Cloud Build should not upload. gcloud uses this file instead of .gitignore.
+.git
+.github
+node_modules
+dist
+server/node_modules
+server/dist
+tmp-verify
+.env
+.env.*
+*.log
+.DS_Store
