@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import fs from "node:fs";
 
-const BASE = "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://localhost:3000";
 const SHOTS = "tmp-verify/shots";
 fs.mkdirSync(SHOTS, { recursive: true });
 
