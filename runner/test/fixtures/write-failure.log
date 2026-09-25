@@ -1,0 +1,6 @@
+[SIMULATION] Compiling workflow sim-spike-write
+[SIMULATION] Using target staging-settings
+[SIMULATION] Trigger index 0 selected
+[SIMULATION] Starting workflow simulation
+[USER LOG] transfer: building evm tx for chain ethereum
+✗ workflow execution failed: [3]InvalidArgument: input value for evm encoder needs to be a byte array and cannot be empty or nil
