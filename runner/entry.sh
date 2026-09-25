@@ -5,6 +5,10 @@
 #   SRC_URL       required. https:// signed URL (GCS) or file:// absolute path
 #                 to a gzipped tarball of the CRE PROJECT ROOT (project.yaml,
 #                 <slug>-workflow/, .env.example at the archive top level).
+#   RESULT_URL    optional. https:// signed PUT URL (GCS) or file:// absolute
+#                 path. The NDJSON event stream is uploaded there after the
+#                 run; an upload failure is a stderr warning only and never
+#                 changes the status or exit code.
 #   RUN_ID        optional. Echoed into the final result event.
 #   TRIGGER_IDX   optional, default 0. --trigger-index for the CLI.
 #   TARGET        optional, default staging-settings. --target for the CLI.
@@ -21,6 +25,8 @@
 #       markers (the CLI's own exit codes are unreliable; see RUNNER.md).
 #   stderr: runner diagnostics, prefixed "[sim-entry]". Always human-readable,
 #     never contains SECRETS_JSON values.
+#   RESULT_URL: when set, the same NDJSON stream is uploaded there after the
+#     run (best effort). Upload failures are stderr warnings only.
 #
 # EXIT CODE (this script's own - trustworthy, unlike the CLI's):
 #   0 only when status=succeeded, 1 otherwise (incl. setup failures).
@@ -152,9 +158,40 @@ cd - >/dev/null || true
 log "CLI exited code=$cli_code (informational only; status comes from output markers)"
 
 # --- stream events: raw CLI lines first, then the terminal result event.
-classify_emit_events "$rawlog" "$RUN_ID"
-classify_emit_summary "$rawlog" "$cli_code" "$RUN_ID"
+# The stream is also mirrored into $events for the optional RESULT_URL upload.
+events="$workdir/events.ndjson"
+: > "$events"
+classify_emit_events "$rawlog" "$RUN_ID" | tee -a "$events"
+classify_emit_summary "$rawlog" "$cli_code" "$RUN_ID" | tee -a "$events"
 status="$(classify_status "$rawlog" "$cli_code")"
+
+# --- upload the event stream (best effort; never changes status/exit code)
+if [ -n "${RESULT_URL:-}" ]; then
+  case "$RESULT_URL" in
+    https://* | http://*)
+      log "uploading events to RESULT_URL"
+      RESULT_URL="$RESULT_URL" EVENTS="$events" bun -e '
+        const res = await fetch(process.env.RESULT_URL, {
+          method: "PUT",
+          headers: { "Content-Type": "application/x-ndjson" },
+          body: Bun.file(process.env.EVENTS),
+        })
+        if (!res.ok) { console.error(`upload failed: HTTP ${res.status}`); process.exit(1) }
+      ' || log "WARN: events upload failed (status unchanged)"
+      ;;
+    file://*)
+      dest="${RESULT_URL#file://}"
+      if cp "$events" "$dest"; then
+        log "events written to $dest"
+      else
+        log "WARN: cannot copy events to $dest (status unchanged)"
+      fi
+      ;;
+    *)
+      log "WARN: unsupported RESULT_URL scheme (want https:// or file://): ${RESULT_URL%%://*}://"
+      ;;
+  esac
+fi
 
 log "done status=$status exit_code_hint=$cli_code run_id='${RUN_ID:-<unset>}'"
 if [ "$status" = "succeeded" ]; then

@@ -110,7 +110,7 @@ jobs:
             --service-account=flowkit-api-run@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --add-cloudsql-instances=${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:flowkit-db \
             --set-secrets=DATABASE_URL=flowkit-database-url-internal:latest,GITHUB_CLIENT_SECRET=flowkit-github-secret:latest \
-            --set-env-vars=NODE_ENV=production,SERVER_PORT=8080,GITHUB_CLIENT_ID=${{ vars.GH_OAUTH_CLIENT_ID }},PUBLIC_APP_URL=${{ vars.PUBLIC_APP_URL }} \
+            --set-env-vars=NODE_ENV=production,SERVER_PORT=8080,GITHUB_CLIENT_ID=${{ vars.GH_OAUTH_CLIENT_ID }},PUBLIC_APP_URL=${{ vars.PUBLIC_APP_URL }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},SIM_BUCKET=stringz-sim-projects,SIM_QUEUE=simulation-dispatch,SIM_QUEUE_LOCATION=${{ vars.GCP_REGION }},SIM_JOB_NAME=sim-runner,SIM_JOB_LOCATION=${{ vars.GCP_REGION }} \
             --memory=512Mi --cpu=1 --concurrency=40 --min-instances=0 --max-instances=10 \
             --allow-unauthenticated --project=${{ vars.GCP_PROJECT_ID }} --quiet
       - name: Wait for health
@@ -120,3 +120,43 @@ jobs:
             sleep 5
           done
           echo "deployed service did not become healthy"; exit 1
+
+  # Build + push the simulation runner image on every merge to main (after
+  # quality). Same WIF auth as the api deploy; the deploy SA has
+  # artifactregistry.writer. Tags are sha-<full sha>, same convention as the
+  # api image. The Cloud Run Job itself is created/updated manually per
+  # INFRA.md - pushing the image does not change what the job runs.
+  runner-image:
+    needs: quality
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RUNNER_IMAGE_TAG: us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/flowkit/sim-runner:sha-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Build and push runner image
+        run: |
+          BUILD_ID=$(gcloud builds submit \
+            --config=runner/cloudbuild.yaml \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --substitutions="_IMAGE_TAG=${RUNNER_IMAGE_TAG}" \
+            --async --format='value(id)' --quiet)
+          echo "Cloud Build ID: $BUILD_ID"
+          while true; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" \
+              --project=${{ vars.GCP_PROJECT_ID }} --format='value(status)')
+            echo "build status: $STATUS"
+            case "$STATUS" in
+              SUCCESS) break ;;
+              FAILURE|CANCELLED|TIMEOUT) exit 1 ;;
+            esac
+            sleep 15
+          done

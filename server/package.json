@@ -11,10 +11,14 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@google-cloud/run": "^4.1.0",
+    "@google-cloud/storage": "^8.2.0",
+    "@google-cloud/tasks": "^7.2.0",
     "@hono/node-server": "^1.14.0",
     "@hono/trpc-server": "^0.3.4",
     "@trpc/server": "^11.6.0",
     "drizzle-orm": "^0.44.0",
+    "google-auth-library": "^11.1.0",
     "hono": "^4.8.0",
     "pg": "^8.23.0",
     "viem": "^2.56.7",
