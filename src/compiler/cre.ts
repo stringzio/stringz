@@ -315,6 +315,13 @@ ${emitOutputsWrite(n, [...fnEntries, ["result", v]])}
       if (n.action === "Batch send") {
         throw new BlueprintError("Batch send ships in v0.1 - split it into one Send per recipient for now.", "UNSUPPORTED_MODULE");
       }
+      if (n.action === "Send native") {
+        // Runtime-verified 2026-09-25 (Phase 0 spike): CRE reports carry no
+        // native value and the EVM encoder rejects empty calldata, so a raw
+        // "native send" cannot work. Native moves need the receiver-contract
+        // (forwarder) path from the deploy-authorization work.
+        throw new BlueprintError("Send native ships with the receiver-contract (forwarder) path - CRE reports carry no native value. Use Send ERC-20 for token transfers.", "UNSUPPORTED_MODULE");
+      }
       const lines = [
         `  writeOnchain(runtime, "${selector}", runtime.config.contracts.${v}.receiver, runtime.config.contracts.${v}.callData)`,
       ];
@@ -912,6 +919,9 @@ function emitConfig(bp: Blueprint, schedule: string): string {
       if (n.action === "Batch send") {
         throw new BlueprintError("Batch send ships in v0.1 - split it into one Send per recipient for now.", "UNSUPPORTED_MODULE");
       }
+      if (n.action === "Send native") {
+        throw new BlueprintError("Send native ships with the receiver-contract (forwarder) path - CRE reports carry no native value. Use Send ERC-20 for token transfers.", "UNSUPPORTED_MODULE");
+      }
       if (n.action === "Send ERC-20") {
         const token = p.tokenAddress?.trim() ?? "";
         if (!ADDRESS_RE.test(token))
@@ -923,8 +933,7 @@ function emitConfig(bp: Blueprint, schedule: string): string {
           receiver: token,
         };
       } else {
-        // Send native: the report itself moves the funds, so no calldata.
-        contracts[nodeVar(n)] = { address: to, callData: "0x", receiver: to };
+        throw new BlueprintError(`${label}: unknown action "${n.action}".`, "UNSUPPORTED_MODULE");
       }
     }
     if (n.module === "swap" && !swapQuoteUrl) swapQuoteUrl = p.endpoint?.trim() ?? "";
