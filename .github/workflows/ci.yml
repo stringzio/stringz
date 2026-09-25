@@ -85,11 +85,24 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - name: Build and push image
         run: |
-          gcloud builds submit \
+          # --async: log streaming needs project Viewer, which the deploy SA
+          # deliberately is not. Submit, then poll the build status ourselves.
+          BUILD_ID=$(gcloud builds submit \
             --config=cloudbuild.yaml \
             --project=${{ vars.GCP_PROJECT_ID }} \
             --substitutions="_IMAGE_TAG=${IMAGE_TAG},_VITE_WC_PROJECT_ID=${{ secrets.VITE_WC_PROJECT_ID }}" \
-            --quiet
+            --async --format='value(id)' --quiet)
+          echo "Cloud Build ID: $BUILD_ID"
+          while true; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" \
+              --project=${{ vars.GCP_PROJECT_ID }} --format='value(status)')
+            echo "build status: $STATUS"
+            case "$STATUS" in
+              SUCCESS) break ;;
+              FAILURE|CANCELLED|TIMEOUT) exit 1 ;;
+            esac
+            sleep 15
+          done
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy flowkit-api --image "$IMAGE_TAG" \
