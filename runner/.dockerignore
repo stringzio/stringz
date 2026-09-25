@@ -1,0 +1,8 @@
+# keep the build context small and deterministic
+**/node_modules
+**/.bun
+**/.cre_build_tmp.js
+*.tgz
+*.log
+.git
+test/fixtures
