@@ -15,6 +15,11 @@
 #   SIM_TIMEOUT   optional, default 150 (seconds). Killed with SIGKILL 10s after.
 #   SECRETS_JSON  optional. JSON object merged into the project .env.
 #                 Values are written to disk and never logged.
+#   CRE_SECRETS   optional, default /secrets/cre. Auth session mount: a
+#                 directory (docker -v for local runs) OR a single file
+#                 (Secret Manager volume mounts deliver the payload as one
+#                 file - the tar.gz archive from the rotation runbook, which
+#                 entry.sh extracts into $HOME/.cre).
 #
 # OUTPUT CONTRACT
 #   stdout: pure NDJSON event stream, one object per line.
@@ -102,14 +107,22 @@ done
 [ -f "$proj/project.yaml" ] || die "archive has no project.yaml at its top level"
 log "project extracted: $(basename "$wfdir")"
 
-# --- auth session: /secrets/cre is a read-only mount; the CLI must be able to
-# write refreshed OAuth tokens into $HOME/.cre, so we copy it (verified: a
-# read-only mount fails auth with exit code 0).
-if [ -d /secrets/cre ]; then
-  cp -r /secrets/cre "$HOME/.cre" || die "cannot copy /secrets/cre to \$HOME/.cre"
-  log "auth session copied from /secrets/cre (read-only mount -> writable \$HOME/.cre)"
+# --- auth session. /secrets/cre from Secret Manager is a read-only FILE
+# (the tar.gz archive produced by the rotation runbook), while local docker
+# runs mount ~/.cre as a read-only DIRECTORY. The CLI must be able to write
+# refreshed OAuth tokens into $HOME/.cre, so we copy/extract it there (a
+# read-only mount makes that write fail and surfaces as an auth error with
+# exit code 0 - verified).
+CRE_SECRETS="${CRE_SECRETS:-/secrets/cre}"
+if [ -d "$CRE_SECRETS" ]; then
+  cp -r "$CRE_SECRETS" "$HOME/.cre" || die "cannot copy $CRE_SECRETS to \$HOME/.cre"
+  log "auth session copied from $CRE_SECRETS (read-only mount -> writable \$HOME/.cre)"
+elif [ -f "$CRE_SECRETS" ]; then
+  tar -xzf "$CRE_SECRETS" -C "$HOME" || die "cannot extract session archive $CRE_SECRETS"
+  [ -f "$HOME/.cre/cre.yaml" ] || die "session archive $CRE_SECRETS did not contain .cre/cre.yaml"
+  log "auth session extracted from $CRE_SECRETS archive (read-only mount -> writable \$HOME/.cre)"
 else
-  log "WARN: /secrets/cre not mounted; local mock mode, the CLI will report an auth error without a session"
+  log "WARN: $CRE_SECRETS not mounted; local mock mode, the CLI will report an auth error without a session"
 fi
 
 # --- env file: seed from .env.example if the archive carries none, then merge
