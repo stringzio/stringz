@@ -104,9 +104,13 @@ export async function enqueueTask(runId: string): Promise<string> {
         url: audience,
         headers: { "Content-Type": "application/json" },
         body: Buffer.from(JSON.stringify({ runId })).toString("base64"),
-        // serviceAccountEmail omitted on purpose: the token is minted for the
-        // caller's own identity (the API's service account).
-        oidcToken: { audience },
+        // The Cloud Tasks API requires an explicit SA email here (it does NOT
+        // default to the caller's identity). It must be an SA the Cloud Tasks
+        // service agent can impersonate - flowkit-api-run was granted that.
+        oidcToken: {
+          serviceAccountEmail: process.env.SIM_DISPATCH_SA_EMAIL ?? `flowkit-api-run@${projectId}.iam.gserviceaccount.com`,
+          audience,
+        },
       },
       scheduleTime: { seconds: Math.floor(Date.now() / 1000) },
     },
