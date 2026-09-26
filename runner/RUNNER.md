@@ -115,9 +115,10 @@ inside the run's sandbox:
   every occurrence of each value with `***` BEFORE a line is JSON-encoded or
   emitted. The contract tests pin bash/TS parity and the edge cases. Values under
   4 characters are never scrubbed (sub-string noise would destroy logs).
-- The API deletes the secrets object the moment a run reconciles to a terminal
-  state; the bucket lifecycle is the backstop. Secrets never touch the DB, the
-  job env, or any log.
+- The API deletes the secrets object at reconcile-to-terminal, and the runner
+  destroys it at actual run end via `SECRETS_DELETE_URL` (signed DELETE) - so a
+  run nobody ever polls again still loses its secrets in minutes, not at the
+  7-day lifecycle. Secrets never touch the DB, the job env, or any log.
 - Redaction semantic: FULL secret values are masked (the `console.log(secret)`
   case, same contract as GitHub Actions masking). Partial echoes - a substring
   of a secret logged without its prefix/suffix - are not masked; that is

@@ -134,7 +134,19 @@ export async function signSecretsUrl(runId: string): Promise<string> {
   return url;
 }
 
-/** Best-effort purge of a run's secrets; runs exactly once per terminal reconcile. */
+/** Signed DELETE so the RUNNER destroys the secrets object at actual run end
+ *  (reconcile-time deletion is lazy - polls may never come). */
+export async function signSecretsDeleteUrl(runId: string): Promise<string> {
+  assertCloudSimEnabled();
+  const [url] = await getStorage().bucket(bucketName).file(secretsObject(runId)).getSignedUrl({
+    version: "v4",
+    action: "delete",
+    expires: Date.now() + DOWNLOAD_TTL_MS,
+  });
+  return url;
+}
+
+/** Best-effort purge of a run's secrets; runs at reconcile AND at runner teardown. */
 export async function deleteRunSecrets(runId: string): Promise<void> {
   if (!cloudSimEnabled) return;
   try {
@@ -181,10 +193,11 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
   if (row.status !== "queued") return "not-queued";
   const now = new Date().toISOString();
   await db.update(schema.simulationRuns).set({ status: "running", updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
-  const [srcUrl, resultUrl, secretsUrl] = await Promise.all([
+  const [srcUrl, resultUrl, secretsUrl, secretsDeleteUrl] = await Promise.all([
     signProjectDownloadUrl(runId),
     signResultUploadUrl(runId),
     signSecretsUrl(runId),
+    signSecretsDeleteUrl(runId),
   ]);
   try {
     await getJobs().runJob({
@@ -203,8 +216,12 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
               { name: "INGEST_URL", value: `${appUrl()}/sim-ingest?runId=${runId}` },
               { name: "INGEST_TOKEN", value: ingestTokenFor(runId) },
               // Phase 3: signed GET for the run's ephemeral secrets; a 404
-              // means the run has none.
+              // means the run has none. SECRETS_DELETE_URL lets the runner
+              // destroy the object at actual run end (reconcile deletion is
+              // lazy - a run nobody polls again would otherwise keep its
+              // secrets until the lifecycle purge).
               { name: "SECRETS_URL", value: secretsUrl },
+              { name: "SECRETS_DELETE_URL", value: secretsDeleteUrl },
             ],
           },
         ],

@@ -30,6 +30,8 @@
 #                 Values are merged into the project .env (mode 0600, tmpfs)
 #                 and recorded in a values file so every emitted log line is
 #                 scrubbed of them before it reaches stdout/GCS/ingest.
+#   SECRETS_DELETE_URL optional (Phase 3). Signed DELETE the runner uses to
+#                 destroy the secrets object at actual run end.
 #   SECRETS_JSON  optional. Local-dev equivalent of SECRETS_URL (env-delivered
 #                 JSON, same merge + redaction).
 #
@@ -252,6 +254,16 @@ timeout -k 10 "$SIM_TIMEOUT" cre workflow simulate "$wfdir" \
 cli_code=$?
 cd - >/dev/null || true
 log "CLI exited code=$cli_code (informational only; status comes from output markers)"
+
+# --- destroy the run's secrets object at ACTUAL run end (the API also purges
+# at reconcile; this covers runs nobody ever polls again). Best effort: a
+# failure here is a stderr warning, never a status change.
+if [ -n "${SECRETS_DELETE_URL:-}" ] && [ -n "$secrets_json" ]; then
+  SECRETS_DELETE_URL="$SECRETS_DELETE_URL" bun -e '
+    const res = await fetch(process.env.SECRETS_DELETE_URL, { method: "DELETE", signal: AbortSignal.timeout(30000) })
+    if (!res.ok && res.status !== 404) { console.error(`secrets delete returned HTTP ${res.status}`); process.exit(1) }
+  ' && log "run secrets destroyed" || log "WARN could not delete run secrets object (reconcile/lifecycle will)"
+fi
 
 # --- live stream: hand the tailer its terminal event and let it flush. The
 # result event must be posted after every log/node event, so it goes to the
