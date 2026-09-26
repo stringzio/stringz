@@ -77,6 +77,8 @@ app.post("/sim-dispatch", async (c) => {
     if (outcome === "not-queued") return c.json({ ok: false }, 409);
     return c.json({ ok: true });
   } catch (err) {
+    // Cloud Tasks only sees the status code - the message must go to logs.
+    console.error(`[sim-dispatch] runJob failed: ${err instanceof Error ? err.message : String(err)}`);
     return c.json({ ok: false, error: err instanceof Error ? err.message : "dispatch failed" }, 500);
   }
 });
