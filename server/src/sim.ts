@@ -129,21 +129,29 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
   const now = new Date().toISOString();
   await db.update(schema.simulationRuns).set({ status: "running", updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
   const [srcUrl, resultUrl] = await Promise.all([signProjectDownloadUrl(runId), signResultUploadUrl(runId)]);
-  await getJobs().runJob({
-    name: `projects/${projectId}/locations/${jobLocation}/jobs/${jobName}`,
-    overrides: {
-      containerOverrides: [
-        {
-          env: [
-            { name: "SRC_URL", value: srcUrl },
-            { name: "RESULT_URL", value: resultUrl },
-            { name: "RUN_ID", value: runId },
-            { name: "TRIGGER_IDX", value: String(row.triggerIdx) },
-          ],
-        },
-      ],
-    },
-  });
+  try {
+    await getJobs().runJob({
+      name: `projects/${projectId}/locations/${jobLocation}/jobs/${jobName}`,
+      overrides: {
+        containerOverrides: [
+          {
+            env: [
+              { name: "SRC_URL", value: srcUrl },
+              { name: "RESULT_URL", value: resultUrl },
+              { name: "RUN_ID", value: runId },
+              { name: "TRIGGER_IDX", value: String(row.triggerIdx) },
+            ],
+          },
+        ],
+      },
+    });
+  } catch (err) {
+    // The job never started: go back to queued so the queue's retry (or the
+    // next user poll) gets a real second attempt instead of a row stuck
+    // "running" until the stale sweep.
+    await db.update(schema.simulationRuns).set({ status: "queued", updatedAt: new Date().toISOString() }).where(eq(schema.simulationRuns.id, runId));
+    throw err;
+  }
   return "ok";
 }
 
