@@ -4,6 +4,7 @@ import type { NodeIO, Json, RunSource } from "../lib/flowData";
 
 const SOURCE_BADGE: Record<RunSource, { label: string; className: string }> = {
   live: { label: "live on-chain", className: "bg-[#EAF2EA] text-[#3f6b4f]" },
+  cloud: { label: "cloud run", className: "bg-[#E9F0F7] text-[#3d5f8a]" },
   computed: { label: "computed", className: "bg-[#E9F2F4] text-[#3d6a75]" },
   sample: { label: "simulated", className: "bg-[#FDF3E3] text-[#b0803a]" },
   pinned: { label: "pinned", className: "bg-gray-100 text-gray-500" },
@@ -88,6 +89,11 @@ export default function RunData({
           {badge?.label === "simulated" && (
             <p className="mb-2 text-[10.5px] leading-snug text-gray-400">
               Shaped sample - the real call fires only in the exported CRE workflow under your keys.
+            </p>
+          )}
+          {badge?.label === "cloud run" && (
+            <p className="mb-2 text-[10.5px] leading-snug text-gray-400">
+              Real output captured from a Stringz cloud run of this flow.
             </p>
           )}
           {error && (

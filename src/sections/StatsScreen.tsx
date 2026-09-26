@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, Download, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight, Cloud, Download, Play } from "lucide-react";
 import Toast, { type ToastData } from "../components/Toast";
 import { api } from "../lib/api";
 import { recentRunsLocal } from "../lib/runLog";
-import type { RunRecord } from "../lib/contract";
+import type { RunRecord, SimulateListResponse } from "../lib/contract";
+import type { CloudRunState, CloudPhase } from "../lib/cloudSim";
+import { CloudRunDetail } from "./CloudRunSheet";
 
 type Range = "7D" | "30D" | "90D";
 const RANGES: Range[] = ["7D", "30D", "90D"];
@@ -35,6 +37,8 @@ function fmtDay(iso: string): string {
 export default function StatsScreen({ desktop = false, onBack }: { desktop?: boolean; onBack: () => void }) {
   const [range, setRange] = useState<Range>("7D");
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
+  const [cloudRuns, setCloudRuns] = useState<SimulateListResponse | null>(null);
+  const [cloudDetail, setCloudDetail] = useState<{ runId: string; state: CloudRunState | null } | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastSeq = useRef(0);
@@ -59,10 +63,44 @@ export default function StatsScreen({ desktop = false, onBack }: { desktop?: boo
         setRuns(merged);
       })
       .catch(() => !cancelled && setRuns(recentRunsLocal()));
+    api.simulate
+      .list()
+      .then((list) => !cancelled && setCloudRuns(list))
+      .catch(() => !cancelled && setCloudRuns([]));
     return () => {
       cancelled = true;
     };
   }, []);
+
+  /** Expand/collapse a cloud run's full log (loaded from the stored result). */
+  const toggleCloudDetail = (runId: string) => {
+    if (cloudDetail?.runId === runId) {
+      setCloudDetail(null);
+      return;
+    }
+    setCloudDetail({ runId, state: null });
+    api.simulate
+      .status({ runId })
+      .then((st) =>
+        setCloudDetail((prev) =>
+          prev?.runId === runId
+            ? {
+                runId,
+                state: {
+                  phase: st.status as CloudPhase,
+                  runId,
+                  events: st.events as CloudRunState["events"],
+                  startedAt: new Date(st.createdAt).getTime(),
+                },
+              }
+            : prev,
+        ),
+      )
+      .catch(() => {
+        setCloudDetail(null);
+        showToast("Could not load that run's log");
+      });
+  };
 
   const loading = runs === null;
   const list = runs ?? [];
@@ -146,7 +184,7 @@ export default function StatsScreen({ desktop = false, onBack }: { desktop?: boo
 
         {loading ? (
           <div className="mt-16 text-center text-[13.5px] font-medium text-gray-400">Reading your runs…</div>
-        ) : list.length === 0 ? (
+        ) : list.length === 0 && (cloudRuns?.length ?? 0) === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
@@ -289,6 +327,55 @@ export default function StatsScreen({ desktop = false, onBack }: { desktop?: boo
               <Download size={15} /> Export report
             </motion.button>
           </>
+        )}
+
+        {/* cloud simulations - independent of the local-run log above */}
+        {(cloudRuns?.length ?? 0) > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 22 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-6 rounded-[28px] bg-white p-5 ring-1 ring-black/[0.05]"
+          >
+            <h3 className="mb-1 flex items-center gap-2 text-[17px] font-extrabold text-[#1a1a1a]">
+              <Cloud size={17} className="text-[#3d5f8a]" /> Cloud simulations
+            </h3>
+            <p className="mb-2 text-[11.5px] text-gray-400">Test-in-cloud runs on Stringz infrastructure - tap one for its full log.</p>
+            {cloudRuns!.map((r, i) => (
+              <div key={r.id} className={i > 0 ? "border-t border-gray-50" : ""}>
+                <button
+                  onClick={() => toggleCloudDetail(r.id)}
+                  className="flex w-full items-center justify-between py-2.5 text-left transition active:opacity-70"
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`h-2.5 w-2.5 rounded-full ${
+                        r.status === "succeeded" ? "bg-emerald-500" : r.status === "queued" || r.status === "running" ? "bg-[#3d5f8a]" : "bg-rose-400"
+                      }`}
+                    />
+                    <div>
+                      <div className="text-[13.5px] font-semibold text-[#1a1a1a]">
+                        Cloud run {r.id.slice(0, 8)}
+                        {r.errorClass ? ` · ${r.errorClass}` : ""}
+                      </div>
+                      <div className="text-[11.5px] text-gray-500">{ago(r.createdAt)}</div>
+                    </div>
+                  </div>
+                  <span className={`text-[12px] font-medium ${r.status === "succeeded" ? "text-gray-400" : "text-rose-500"}`}>
+                    {r.status === "succeeded" ? "ok" : r.status === "queued" || r.status === "running" ? r.status : "failed"}
+                  </span>
+                </button>
+                {cloudDetail?.runId === r.id && (
+                  <div className="mb-3 rounded-2xl bg-gray-50/70 p-3">
+                    {cloudDetail.state ? (
+                      <CloudRunDetail state={cloudDetail.state} />
+                    ) : (
+                      <div className="px-2 py-1 text-[12px] text-gray-400">Loading log…</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </motion.div>
         )}
       </div>
 

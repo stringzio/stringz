@@ -299,7 +299,7 @@ function executeLocal(
  * honestly which outputs are live reads, which were computed in-browser,
  * and which are simulated samples (actions never fire from the canvas).
  */
-export type RunSource = "live" | "computed" | "sample" | "pinned" | "skipped" | "error";
+export type RunSource = "live" | "computed" | "sample" | "pinned" | "skipped" | "error" | "cloud";
 
 export interface RunResult {
   io: Record<string, NodeIO>;
