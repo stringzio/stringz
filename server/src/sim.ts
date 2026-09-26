@@ -2,15 +2,17 @@ import { Storage } from "@google-cloud/storage";
 import { CloudTasksClient } from "@google-cloud/tasks";
 import { JobsClient } from "@google-cloud/run";
 import { OAuth2Client } from "google-auth-library";
-import { eq } from "drizzle-orm";
-import { db, schema } from "./db/client";
+import { and, eq, gt } from "drizzle-orm";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { db, pool, schema } from "./db/client";
 
 /**
  * Cloud simulation orchestration. A run's life:
  *   enqueue -> user PUTs the project tarball to a signed URL -> Cloud Tasks
  *   POSTs /sim-dispatch -> the API starts the Cloud Run Job -> the runner
- *   uploads its NDJSON event stream to a signed URL -> polling reconciles the
- *   row from the uploaded result object.
+ *   streams NDJSON events to /sim-ingest during execution (Phase 2, HMAC-
+ *   tokened) and uploads the full NDJSON stream to a signed URL at the end ->
+ *   polling reconciles the row from the uploaded result object.
  *
  * Env-gated: without SIM_BUCKET every entry point throws, so instances with no
  * bucket configured stay inert.
@@ -140,6 +142,11 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
               { name: "RESULT_URL", value: resultUrl },
               { name: "RUN_ID", value: runId },
               { name: "TRIGGER_IDX", value: String(row.triggerIdx) },
+              // Phase 2: live event stream back to the API. The runner only
+              // starts POSTing once its build includes the ingest client;
+              // until then these are inert extra env vars.
+              { name: "INGEST_URL", value: `${appUrl()}/sim-ingest?runId=${runId}` },
+              { name: "INGEST_TOKEN", value: ingestTokenFor(runId) },
             ],
           },
         ],
@@ -226,4 +233,114 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
     return { row, events: await loadEvents(row.id) };
   }
   return { row, events: [] };
+}
+
+// ── Phase 2: live event stream (ingest + fan-out) ────────────────────────────
+//
+// The runner POSTs NDJSON events to /sim-ingest while it executes; the SSE
+// endpoint (/sim/stream) relays them to the builder. Events are buffered in
+// the simulation_events table (not process memory) so streaming works when the
+// API service scales past one instance; LISTEN/NOTIFY on 'sim_events' carries
+// only the runId (never the payload - NOTIFY caps at 8000 bytes) and
+// subscribers re-SELECT. The GCS result object stays the canonical completed
+// log; this table feeds live views and fast reconnects.
+
+/** Ingest auth: HMAC of the runId. Env secret when set (stable across
+ *  restarts); otherwise a per-boot random one (in-flight ingest dies on
+ *  restart, runs still finish via the GCS path). */
+const ingestSecret = process.env.SIM_INGEST_SECRET ?? randomBytes(32).toString("hex");
+
+export function ingestTokenFor(runId: string): string {
+  return createHmac("sha256", ingestSecret).update(`sim-ingest:${runId}`).digest("hex");
+}
+
+export function verifyIngestToken(runId: string, token: string | undefined): boolean {
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) return false;
+  const want = Buffer.from(ingestTokenFor(runId), "hex");
+  const got = Buffer.from(token, "hex");
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
+const MAX_INGEST_BATCH = 500;
+const MAX_EVENT_BYTES = 16 * 1024;
+
+const isEventLike = (e: unknown): e is SimulationEvent =>
+  typeof e === "object" && e !== null && typeof (e as SimulationEvent).t === "string";
+
+export type IngestOutcome = "ok" | "bad-token" | "not-found";
+
+/** Append a runner event batch to the live buffer and wake subscribers. */
+export async function ingestEvents(
+  runId: string,
+  token: string | undefined,
+  events: unknown[],
+): Promise<{ outcome: IngestOutcome; received?: number }> {
+  // Only the bucket flag gates here - ingest touches Postgres, never GCS or
+  // the GCP project id (unlike enqueue/dispatch).
+  if (!cloudSimEnabled) throw new Error("Cloud simulation is not enabled on this instance");
+  if (!verifyIngestToken(runId, token)) return { outcome: "bad-token" };
+  const [row] = await db.select({ id: schema.simulationRuns.id }).from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
+  if (!row) return { outcome: "not-found" };
+  const clean = events
+    .filter(isEventLike)
+    .map((e) => JSON.stringify(e))
+    .filter((s) => s.length <= MAX_EVENT_BYTES)
+    .slice(0, MAX_INGEST_BATCH);
+  if (!clean.length) return { outcome: "ok", received: 0 };
+  const now = new Date().toISOString();
+  await db.insert(schema.simulationEvents).values(clean.map((event) => ({ runId, event, createdAt: now })));
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_notify('sim_events', $1)", [runId]);
+  } finally {
+    client.release();
+  }
+  return { outcome: "ok", received: clean.length };
+}
+
+export interface StoredEvent {
+  seq: bigint;
+  event: SimulationEvent;
+}
+
+/** Events for a run after the given seq, in arrival order. */
+export async function readEventsSince(runId: string, sinceSeq: bigint, limit = 1000): Promise<StoredEvent[]> {
+  const rows = await db
+    .select()
+    .from(schema.simulationEvents)
+    .where(and(eq(schema.simulationEvents.runId, runId), gt(schema.simulationEvents.seq, sinceSeq)))
+    .orderBy(schema.simulationEvents.seq)
+    .limit(limit);
+  const out: StoredEvent[] = [];
+  for (const row of rows) {
+    try {
+      out.push({ seq: row.seq, event: JSON.parse(row.event) as SimulationEvent });
+    } catch {
+      // tolerate a bad row, keep the stream moving
+    }
+  }
+  return out;
+}
+
+export interface RunNotifier {
+  close: () => void;
+}
+
+/**
+ * Subscribe to run-event notifications. Fires with the runId; payloads travel
+ * via the table, never through NOTIFY itself. One pooled connection per
+ * subscriber - PoC concurrency is tiny.
+ */
+export async function acquireRunNotifier(onNotify: (runId: string) => void): Promise<RunNotifier> {
+  const client = await pool.connect();
+  client.on("notification", (n) => {
+    if (n.channel === "sim_events" && n.payload) onNotify(n.payload);
+  });
+  await client.query("LISTEN sim_events");
+  return {
+    close: () => {
+      client.removeAllListeners("notification");
+      client.release();
+    },
+  };
 }

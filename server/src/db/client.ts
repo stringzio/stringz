@@ -20,4 +20,4 @@ const pool = new pg.Pool({
 
 export const db = drizzle(pool, { schema });
 export type Db = typeof db;
-export { schema };
+export { schema, pool };

@@ -2,15 +2,17 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { streamSSE } from "hono/streaming";
 import { trpcServer } from "@hono/trpc-server";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { eq } from "drizzle-orm";
 import { resolve } from "node:path";
 import { appRouter } from "./trpc/routers";
-import { db } from "./db/client";
+import { db, schema } from "./db/client";
 import { getSessionUser, SESSION_COOKIE } from "./session";
 import { oauthApp } from "./oauth";
 import { applyBillingEvent, getProvider } from "./billing";
-import { cloudSimEnabled, verifyDispatchToken, dispatchRun } from "./sim";
+import { cloudSimEnabled, verifyDispatchToken, dispatchRun, ingestEvents, readEventsSince, acquireRunNotifier } from "./sim";
 import { chainId } from "../../src/lib/chainIds";
 
 await migrate(db, { migrationsFolder: resolve(import.meta.dir, "db/migrations") });
@@ -81,6 +83,93 @@ app.post("/sim-dispatch", async (c) => {
     console.error(`[sim-dispatch] runJob failed: ${err instanceof Error ? err.message : String(err)}`);
     return c.json({ ok: false, error: err instanceof Error ? err.message : "dispatch failed" }, 500);
   }
+});
+
+// Live event ingest from the sim runner (Phase 2). Authenticated with a
+// per-run HMAC token delivered as a job env var (the runner SA holds no
+// session). Payloads land in Postgres and fan out over LISTEN/NOTIFY; the
+// completed run still reconciles from the GCS result object.
+app.post("/sim-ingest", async (c) => {
+  if (!cloudSimEnabled) return c.json({ ok: false, error: "Cloud simulation is not enabled on this instance" }, 503);
+  const runId = c.req.query("runId") ?? "";
+  const token = c.req.header("x-run-token");
+  const body = (await c.req.json().catch(() => null)) as unknown;
+  const events = Array.isArray(body) ? body : body && typeof body === "object" ? [body] : [];
+  const result = await ingestEvents(runId, token, events);
+  if (result.outcome === "bad-token") return c.json({ ok: false }, 401);
+  if (result.outcome === "not-found") return c.json({ ok: false }, 404);
+  return c.json({ ok: true, received: result.received ?? 0 });
+});
+
+// Live run-event stream for the builder (Phase 2). Session-authed; only the
+// owning user can read a run's stream. Replays the buffered events, then
+// relays new ones until the runner's result event arrives.
+app.get("/sim/stream", async (c) => {
+  if (!cloudSimEnabled) return c.json({ ok: false, error: "Cloud simulation is not enabled on this instance" }, 503);
+  const user = await getSessionUser(getCookie(c, SESSION_COOKIE));
+  if (!user) return c.json({ ok: false }, 401);
+  const runId = c.req.query("runId") ?? "";
+  if (!runId) return c.json({ ok: false, error: "runId is required" }, 400);
+  const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
+  if (!row || row.userId !== user.id) return c.json({ ok: false }, 404);
+
+  return streamSSE(c, async (stream) => {
+    const abort = c.req.raw.signal;
+    let lastSeq = 0n;
+    let wake: (() => void) | null = null;
+    let closed = false;
+    const pending = new Set<string>();
+    const notifier = await acquireRunNotifier((rid) => {
+      pending.add(rid);
+      wake?.();
+    });
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      notifier.close();
+      wake?.();
+    };
+    abort.addEventListener("abort", cleanup);
+    try {
+      await stream.writeSSE({ event: "ready", data: JSON.stringify({ runId }) });
+      for (;;) {
+        pending.delete(runId);
+        const batch = await readEventsSince(runId, lastSeq);
+        for (const { seq, event } of batch) {
+          lastSeq = seq;
+          const t = typeof event.t === "string" ? event.t : "log";
+          await stream.writeSSE({ event: t, data: JSON.stringify(event) });
+          if (t === "result") {
+            await stream.writeSSE({ event: "done", data: JSON.stringify({ runId }) });
+            return;
+          }
+        }
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const woke = await Promise.race([
+          new Promise<"notify">((resolve) => {
+            wake = () => resolve("notify");
+          }),
+          new Promise<"heartbeat">((resolve) => {
+            timer = setTimeout(() => resolve("heartbeat"), 20000);
+          }),
+        ]).finally(() => {
+          if (timer) clearTimeout(timer);
+          wake = null;
+        });
+        if (closed) return;
+        if (woke === "heartbeat" && !pending.has(runId)) {
+          try {
+            await stream.writeSSE({ event: "ping", data: "{}" });
+          } catch {
+            return; // client gone
+          }
+        }
+      }
+    } finally {
+      abort.removeEventListener("abort", cleanup);
+      cleanup();
+    }
+  });
 });
 
 app.use("/trpc/*", async (c, next) => {
