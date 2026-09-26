@@ -163,20 +163,37 @@ bun runner/test/contract-test.ts
 Fixtures in `runner/test/fixtures/` are built from real captured CLI output lines and cover success, auth failure, write failure, and timeout.
 The tests exercise `runner/lib/classify.sh` (the same functions the entrypoint sources) plus the real `entry.sh` end to end in FILE mode with a stubbed `cre` binary.
 
-## Cloud Run Job spec (later phase, not created here)
+## Cloud Run Job spec (live - see INFRA.md for the deployed config)
 
-- 2 vCPU, 4 GiB memory per task (the javy/WASM compile OOMed at 1 GiB in the live run).
+The `sim-runner` job exists in `us-central1` (project `project-1b9280b0-8678-4006-a48`). CI builds and pushes the image; a maintainer points the job at the new digest after each runner change and re-runs the live e2e.
+
+- 2 vCPU, 4 GiB memory per task (the javy/WASM compile OOMed at 1 GiB in the live run; documented in the repo-root docs).
 - Task timeout 90-180s (the runner's `SIM_TIMEOUT` must stay below the task timeout).
 - `maxRetries: 0`; retries are the caller's decision, not the platform's.
 - Env: `SRC_URL` (signed at dispatch), `RESULT_URL` (signed at dispatch), `RUN_ID`, `TRIGGER_IDX`, `TARGET`, `SIM_TIMEOUT`.
 - Secret volume: the `cre` session mounted read-only at `/secrets/cre`.
 
-## Egress requirements
+## Egress posture
+
+Layered controls, strongest first:
+
+1. **Metadata hosts pinned at container start** (`egress-init.sh`, runs as root for that one step then drops to the bun user): `metadata.google.internal` and `metadata` resolve to `0.0.0.0`, so every name-based metadata lookup in the container fails for all processes (CLI, bun, SDK). The pin lives at container start, not in the image: BuildKit mounts `/etc/hosts` read-only during builds and Docker/Cloud Run shadow a baked file with a runtime one.
+2. **Entry script env scrub** (`entry.sh`): proxy variables and metadata overrides (`GCE_METADATA_HOST` and friends) are unset before anything runs, so an injected env cannot redirect traffic or repoint the metadata server.
+3. **Signed URLs only**: the runner reaches GCS through signed URLs, not application-default credentials, so the runtime service account token is never needed inside the run.
+4. **Least-privilege runtime account**: `stringz-sim-runner` holds exactly one permission (read one secret, the CRE session). Even a leaked token would expose nothing else.
+
+Residual risk, accepted for the PoC and closed in Phase 4:
+
+- Cloud Run tasks run in gVisor **without NET_ADMIN**, so raw-IP link-local egress (for example a literal `http://169.254.169.254`) cannot be filtered inside the task. Phase 4 replaces this with VPC-level controls (connector + firewall + Cloud NAT, or Cloud Run sandboxes when GA).
+- The metadata token endpoints require a `Metadata-Flavor: Google` request header; the generated workflow code never sends custom headers on its only user-controlled fetches (swap/CCIP quote POSTs), so token theft is not practical from a compiled flow today.
+- The user never uploads arbitrary code or tarballs: the project archive is compiled server-side by the Stringz compiler, and the only user-controlled network destinations are swap/CCIP endpoint URL parameters.
+
+### Required egress on the hot path
 
 - Chainlink auth and tenant APIs (session validation and token refresh).
 - Public RPC endpoints that workflow triggers read from.
-- No other egress on the hot path: the CRE CLI, javy, and npm dependencies are baked in.
 - Registry egress only if the bun cache misses (for example a generated project pinning a dependency outside the warmed set).
+- `storage.googleapis.com` for the signed project download and result upload.
 
 ## Security notes
 
@@ -184,5 +201,5 @@ The tests exercise `runner/lib/classify.sh` (the same functions the entrypoint s
 - The work directory is a fresh `mktemp -d` under `/tmp` and is removed on exit; in Cloud Run the whole filesystem is ephemeral.
 - `SECRETS_JSON` values are written into the project `.env` and are never printed to stdout or stderr.
 - Runner diagnostics go to stderr only; stdout stays machine-parseable NDJSON.
-- Compiled user workflows run as WASM inside the CRE sandbox, which itself runs inside the Cloud Run gVisor microVM; the container adds no extra privileges (runs as the `bun` user).
+- Compiled user workflows run as WASM inside the CRE sandbox, which itself runs inside the Cloud Run gVisor microVM; the workload runs as the `bun` user (egress-init drops root immediately after the metadata hostname pin).
 - Project archives come from signed URLs or local files; treat archive contents as untrusted input, same as any uploaded build artifact.

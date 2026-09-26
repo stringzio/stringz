@@ -53,6 +53,15 @@ fi
 # shellcheck source=lib/classify.sh
 . "$SIM_LIB" || die "cannot source classify.sh at $SIM_LIB"
 
+# --- egress scrub: strip ambient proxy and metadata overrides so traffic only
+# goes where this script sends it. The runner never uses a proxy, and GCS is
+# reached via signed URLs, not application-default credentials, so nothing in
+# the run needs the metadata server. Complements the metadata hostname pin
+# applied at container start by egress-init (before this script runs).
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+unset GCE_METADATA_HOST GCE_METADATA_IP GOOGLE_METADATA_REQUEST_HEADERS
+log "egress scrub applied (proxy/metadata env stripped; metadata hosts pinned at start)"
+
 # --- validate inputs
 [ -n "${SRC_URL:-}" ] || die "SRC_URL is required (https:// signed URL or file:// path to project .tgz)"
 TRIGGER_IDX="${TRIGGER_IDX:-0}"
