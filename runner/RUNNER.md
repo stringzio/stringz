@@ -165,7 +165,7 @@ The tests exercise `runner/lib/classify.sh` (the same functions the entrypoint s
 
 ## Cloud Run Job spec (later phase, not created here)
 
-- 1 vCPU, 1 GiB memory per task.
+- 2 vCPU, 4 GiB memory per task (the javy/WASM compile OOMed at 1 GiB in the live run).
 - Task timeout 90-180s (the runner's `SIM_TIMEOUT` must stay below the task timeout).
 - `maxRetries: 0`; retries are the caller's decision, not the platform's.
 - Env: `SRC_URL` (signed at dispatch), `RESULT_URL` (signed at dispatch), `RUN_ID`, `TRIGGER_IDX`, `TARGET`, `SIM_TIMEOUT`.
