@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import {
   Menu, Play, Search, Plus, Pencil, Save, Upload, Settings2,
   History, Ellipsis, Trash2, FlaskConical, Check, Sparkles, Minus, Undo2,
-  Rocket, Wallet, ExternalLink, ShieldCheck, AlertTriangle, Terminal, RefreshCcw, FolderOpen, Copy,
+  Rocket, Wallet, ExternalLink, ShieldCheck, AlertTriangle, Terminal, RefreshCcw, FolderOpen, Copy, Cloud,
 } from "lucide-react";
 import {
   SERVICES, INITIAL_NODES, INITIAL_EDGES, AI_SUGGESTIONS, CHAINS,
@@ -32,6 +32,9 @@ import type { SavedFlow } from "../lib/contract";
 import { executeRun, sampleOutput, type NodeIO, type Json, type RunSource } from "../lib/flowData";
 import { logRunLocal } from "../lib/runLog";
 import { collectRunOverrides } from "../lib/liveRun";
+import { runCloudSimulation, isTerminal, cloudNodeLine, type CloudRunState } from "../lib/cloudSim";
+import { packTarGz } from "../lib/tar";
+import CloudRunSheet from "./CloudRunSheet";
 import RunData from "./RunData";
 import AddPalette from "./AddPalette";
 import AbiFetcher from "./AbiFetcher";
@@ -42,7 +45,7 @@ export const NODE_W = 110;
 export const NODE_H = 92;
 const PANEL_W = 316;
 
-type SheetKind = null | "node" | "add" | "menu" | "settings" | "history" | "more" | "tools" | "ai" | "deploy" | "wallet" | "flows" | "txpreview";
+type SheetKind = null | "node" | "add" | "menu" | "settings" | "history" | "more" | "tools" | "ai" | "deploy" | "wallet" | "flows" | "txpreview" | "cloudrun";
 
 /** Services whose actions move value or mutate chain state - previewable. */
 const WRITE_SERVICES = new Set<ServiceId>(["token-transfer", "contract-call", "swap", "ccip"]);
@@ -140,6 +143,8 @@ export default function CanvasScreen({
   const [runIO, setRunIO] = useState<Record<string, NodeIO>>({});
   const [runSources, setRunSources] = useState<Record<string, RunSource>>({});
   const [runErrors, setRunErrors] = useState<Record<string, string>>({});
+  const [cloud, setCloud] = useState<CloudRunState | null>(null);
+  const cloudAbort = useRef<AbortController | null>(null);
   const [pinned, setPinned] = useState<Record<string, Json>>({});
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** Bottom-bar breathing room: labeled left chrome needs >=1760px so the
@@ -522,6 +527,56 @@ export default function CanvasScreen({
     showToast(pinned[id] ? "Pin removed" : "Output pinned for the next run");
   };
 
+  /** "Test in cloud" (Phase 2): compile, pack, upload, and watch the live stream. */
+  const testInCloud = () => {
+    if (cloud && !isTerminal(cloud.phase)) {
+      setSheet("cloudrun");
+      return;
+    }
+    let tarball: Uint8Array;
+    try {
+      const result = compileFlow(wfName, nodes, edges);
+      tarball = packTarGz(Object.entries(result.creFiles).map(([path, contents]) => ({ path, content: contents })));
+    } catch (err) {
+      showToast(err instanceof BlueprintError ? err.message : "Could not compile this flow for a cloud run");
+      return;
+    }
+    cloudAbort.current?.abort();
+    const ac = new AbortController();
+    cloudAbort.current = ac;
+    setCloud({ phase: "preparing", runId: null, events: [], startedAt: Date.now() });
+    setSheet("cloudrun");
+    void runCloudSimulation({ tarball, onState: setCloud, signal: ac.signal })
+      .then((finalState) => {
+        if (finalState.phase === "succeeded") {
+          // Attach real per-node cloud outputs to the RunData panel,
+          // replacing sample provenance for the nodes the run touched.
+          const io: Record<string, NodeIO> = {};
+          const sources: Record<string, RunSource> = {};
+          for (const e of finalState.events) {
+            if (e.t !== "node" || typeof e.id !== "string") continue;
+            io[e.id] = { input: {}, output: { cloud: cloudNodeLine(e.line) } };
+            sources[e.id] = "cloud";
+          }
+          setRunIO((prev) => ({ ...prev, ...io }));
+          setRunSources((prev) => ({ ...prev, ...sources }));
+          showToast(`Cloud run succeeded${Object.keys(io).length ? " - per-node data attached" : ""}`);
+        } else if (finalState.phase !== "timeout" || !ac.signal.aborted) {
+          showToast(`Cloud run ${finalState.phase.replace("_", " ")} - see the log`);
+        }
+      })
+      .catch((err) => {
+        if (ac.signal.aborted) return;
+        const note = err instanceof Error ? err.message : "Could not start the cloud run";
+        setCloud((prev) =>
+          prev
+            ? { ...prev, phase: "failed", note }
+            : { phase: "failed", runId: null, events: [], note, startedAt: Date.now() },
+        );
+        showToast(note);
+      });
+  };
+
   // ---------- add / remove ----------
   /** First free grid slot: no overlap with existing nodes (ports stay reachable)
    *  and clear of the desktop tools panel. */
@@ -748,6 +803,20 @@ export default function CanvasScreen({
       className={`flex h-11 w-11 items-center justify-center rounded-full text-white shadow-lg backdrop-blur transition active:scale-95 ${running ? "bg-[#3f6b4f]" : "bg-[#1a1a1a]"}`}
     >
       <Play size={16} fill="currentColor" />
+    </button>
+  );
+
+  const cloudActive = !!cloud && !isTerminal(cloud.phase);
+  const cloudButton = (
+    <button
+      onClick={testInCloud}
+      aria-label={cloudActive ? "Cloud run in progress" : "Test in cloud"}
+      title="Test in cloud - run on Stringz infrastructure, no local setup"
+      className={`flex h-11 w-11 items-center justify-center rounded-full shadow-lg backdrop-blur transition active:scale-95 ${
+        cloudActive ? "animate-pulse bg-[#3d5f8a] text-white" : "bg-white/90 text-[#1a1a1a]"
+      }`}
+    >
+      <Cloud size={18} />
     </button>
   );
 
@@ -1081,6 +1150,7 @@ export default function CanvasScreen({
               <Menu size={19} />
             </button>
             {runButton}
+            {cloudButton}
             {deployButton}
             {walletButton}
             <button
@@ -1143,6 +1213,7 @@ export default function CanvasScreen({
         <>
           <div className="absolute bottom-5 left-5 z-20 flex items-center gap-2.5">
             {runButton}
+            {cloudButton}
             {deployButton}
             {walletButton}
           </div>
@@ -1665,13 +1736,18 @@ cd .. && cre workflow simulate ${flowSlug}-workflow --target staging-settings`}<
             <span className="text-[12px] font-bold text-[#1a1a1a]">Stringz Cloud - run it without a local setup</span>
           </div>
           <p className="mt-1 text-[11.5px] leading-snug text-gray-500">
-            We host the runner: simulate on our infrastructure, schedule executions and monitor from the dashboard.
+            We host the runner: your flow executes on Stringz infrastructure and logs stream back live - no CLI, no
+            install. Read-only flows need no keys; webhook and app steps use shaped sample data until secret injection
+            lands.
           </p>
           <button
-            onClick={() => setProFeature("Cloud runners")}
-            className="mt-2 text-[12px] font-bold text-[#3f6b4f] transition active:opacity-60"
+            onClick={() => {
+              setSheet(null);
+              testInCloud();
+            }}
+            className="mt-2 flex items-center gap-1.5 text-[12px] font-bold text-[#3f6b4f] transition active:opacity-60"
           >
-            See Pro
+            <Cloud size={13} /> Test in cloud
           </button>
         </div>
 
@@ -1763,6 +1839,7 @@ cd .. && cre workflow simulate ${flowSlug}-workflow --target staging-settings`}<
         </p>
       </Sheet>
 
+      <CloudRunSheet open={sheet === "cloudrun"} onClose={() => setSheet(null)} state={cloud} />
       <Toast toast={toast} />
       <ProSheet open={!!proFeature} onClose={() => setProFeature(null)} feature={proFeature ?? undefined} />
     </div>

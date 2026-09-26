@@ -9,6 +9,10 @@ import type {
   RunRecord,
   RunRecordInput,
   SavedFlow,
+  SimulateEnqueueInput,
+  SimulateEnqueueResponse,
+  SimulateListResponse,
+  SimulateRun,
   SiweVerifyInput,
   WaitlistJoinInput,
   WaitlistJoinResult,
@@ -69,5 +73,10 @@ export const api = {
   runs: {
     record: (input: RunRecordInput) => call<{ ok: boolean }>("runs.record", input),
     recent: (input: { limit: number }) => call<RunRecord[]>("runs.recent", input),
+  },
+  simulate: {
+    enqueue: (input: SimulateEnqueueInput) => call<SimulateEnqueueResponse>("simulate.enqueue", input),
+    status: (input: { runId: string }) => call<SimulateRun>("simulate.status", input),
+    list: () => call<SimulateListResponse>("simulate.list"),
   },
 };
