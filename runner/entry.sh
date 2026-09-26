@@ -18,8 +18,8 @@
 #   CRE_SECRETS   optional, default /secrets/cre. Auth session mount: a
 #                 directory (docker -v for local runs) OR a single file
 #                 (Secret Manager volume mounts deliver the payload as one
-#                 file - the tar.gz archive from the rotation runbook, which
-#                 entry.sh extracts into $HOME/.cre).
+#                 file - base64-encoded session tar.gz per the rotation
+#                 runbook, decoded by entry.sh into $HOME/.cre).
 #
 # OUTPUT CONTRACT
 #   stdout: pure NDJSON event stream, one object per line.
@@ -118,9 +118,15 @@ if [ -d "$CRE_SECRETS" ]; then
   cp -r "$CRE_SECRETS" "$HOME/.cre" || die "cannot copy $CRE_SECRETS to \$HOME/.cre"
   log "auth session copied from $CRE_SECRETS (read-only mount -> writable \$HOME/.cre)"
 elif [ -f "$CRE_SECRETS" ]; then
-  tar -xzf "$CRE_SECRETS" -C "$HOME" || die "cannot extract session archive $CRE_SECRETS"
+  # The secret payload is the session tar.gz BASE64-ENCODED (pure ASCII).
+  # Binary payloads do not survive every transport layer intact (gcloud's
+  # secrets access re-encodes stdout as UTF-8, and the gzip mount itself
+  # failed live), so the rotation runbook stores base64 and we decode here.
+  # stdin redirect (not a file arg): GNU base64 takes positional files while
+  # BSD base64 needs -i, but both decode stdin with -d.
+  base64 -d < "$CRE_SECRETS" | tar -xz -C "$HOME" || die "cannot decode+extract session archive $CRE_SECRETS"
   [ -f "$HOME/.cre/cre.yaml" ] || die "session archive $CRE_SECRETS did not contain .cre/cre.yaml"
-  log "auth session extracted from $CRE_SECRETS archive (read-only mount -> writable \$HOME/.cre)"
+  log "auth session decoded+extracted from $CRE_SECRETS (read-only mount -> writable \$HOME/.cre)"
 else
   log "WARN: $CRE_SECRETS not mounted; local mock mode, the CLI will report an auth error without a session"
 fi

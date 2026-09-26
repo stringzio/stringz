@@ -83,13 +83,15 @@ The copy is required, not cosmetic: the CLI writes refreshed tokens back into `$
 Two mount forms are supported (`CRE_SECRETS` overrides the path, default `/secrets/cre`):
 
 - **Directory** - local docker runs (`-v ~/.cre:/secrets/cre:ro`); copied as-is.
-- **Single file** - Secret Manager volume mounts deliver the payload as ONE file, so the secret holds the tar.gz archive from the rotation runbook; the entry script extracts it into `$HOME` and verifies `.cre/cre.yaml` came out.
+- **Single file** - Secret Manager volume mounts deliver the payload as ONE file holding the session tar.gz **base64-encoded** (binary payloads do not survive every transport layer intact - gcloud's `secrets versions access` re-encodes stdout as UTF-8, and the raw-gzip mount failed live); the entry script base64-decodes and extracts it into `$HOME` and verifies `.cre/cre.yaml` came out.
 
 ### Rotation runbook
 
 1. The owner re-authenticates locally with `cre login`.
-2. The refreshed `~/.cre` is copied into the secret store that backs the `/secrets/cre` mount.
-3. No running jobs are affected; each task copies the mount at start.
+2. Pack and encode the refreshed session, then add it as a new secret version:
+   `tar -czf /tmp/cre.tgz -C "$HOME" .cre && base64 < /tmp/cre.tgz > /tmp/cre.b64 && gcloud secrets versions add stringz-cre-credentials --data-file=/tmp/cre.b64`
+   (stdin redirection, not file args - GNU and BSD base64 disagree on flags.)
+3. No running jobs are affected; each task decodes the mount at start.
 
 ### Accepted risk
 
