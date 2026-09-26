@@ -136,6 +136,13 @@ export type RunRecord = z.infer<typeof runRecordSchema>;
 export const simulateEnqueueInput = z.object({
   flowId: z.string().uuid().nullish(),
   triggerIdx: z.number().int().min(0).max(100).default(0),
+  /**
+   * Phase 3: run-scoped ephemeral secrets (env var name -> value). The server
+   * writes them to a run-scoped GCS object the runner downloads into the
+   * sandbox .env; they are deleted when the run reaches a terminal state and
+   * are never written to the DB or logs. Single-line values, size-capped.
+   */
+  secrets: z.record(z.string(), z.string()).optional(),
 });
 export type SimulateEnqueueInput = z.infer<typeof simulateEnqueueInput>;
 

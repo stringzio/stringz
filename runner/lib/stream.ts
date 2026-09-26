@@ -21,11 +21,16 @@
  */
 
 import fs from "node:fs";
-import { classifyLine } from "./stream-classify";
+import { classifyLine, scrubSecrets, loadSecretValues } from "./stream-classify";
 
 const [rawlog, workdir] = process.argv.slice(2);
 const url = process.env.INGEST_URL ?? "";
 const token = process.env.INGEST_TOKEN ?? "";
+
+// Phase 3 redaction: same scrub as classify.sh's classify_redact, shared via
+// stream-classify so the contract tests can pin parity on both emitters.
+const secretValues = loadSecretValues(process.env.SECRET_VALUES_FILE);
+const scrub = (line: string): string => scrubSecrets(line, secretValues);
 
 const FLUSH_MS = 1000;
 const MAX_BATCH = 200;
@@ -93,7 +98,7 @@ async function readNewLines(): Promise<void> {
     carry += buf.toString("utf8");
     const parts = carry.split("\n");
     carry = parts.pop() ?? "";
-    for (const line of parts) queue.push(...classifyLine(line));
+    for (const line of parts) queue.push(...classifyLine(scrub(line)));
   } finally {
     await fh.close();
   }
@@ -125,7 +130,7 @@ async function main(): Promise<void> {
       .split("\n")
       .find((l) => l.trim().length > 0);
     if (resultLine) {
-      queue.push(resultLine.trim());
+      queue.push(scrub(resultLine.trim()));
       await flushAll();
     } else {
       log("WARN no result-event.json; result event will not be streamed");

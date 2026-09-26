@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { classifyLine } from "../lib/stream-classify";
+import { classifyLine, scrubSecrets, loadSecretValues } from "../lib/stream-classify";
 
 const root = path.resolve(import.meta.dir, "..");
 const classify = path.join(root, "lib", "classify.sh");
@@ -244,6 +244,54 @@ function runEntryResultUrlTest() {
 }
 runEntryResultUrlTest();
 
+// --- Phase 3: entry.sh merges SECRETS_JSON and redacts values everywhere ----
+// The stub CLI "logs" a line containing the planted secret value; every
+// emitted event (stdout batch, RESULT_URL mirror) must carry *** instead.
+
+function runEntryRedactionTest() {
+  const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
+  const stubDir = path.join(tmp, "bin");
+  fs.mkdirSync(stubDir);
+  const leakyFixture = path.join(tmp, "leaky.log");
+  fs.writeFileSync(
+    leakyFixture,
+    `2026-09-26T00:00:00Z [USER LOG] fmt: posting to https://hooks.example.com/sk-test-PLANTED-12345\n✓ Workflow Simulation Result:\n"ok"\n`,
+  );
+  writeStubBin(stubDir, leakyFixture, "0");
+  const tgz = makeProjectTgz(tmp);
+  const eventsPath = path.join(tmp, "events.ndjson");
+  const entry = path.join(root, "entry.sh");
+  const env = {
+    ...process.env,
+    PATH: `${stubDir}:${process.env.PATH}`,
+    SRC_URL: `file://${tgz}`,
+    RESULT_URL: `file://${eventsPath}`,
+    SECRETS_JSON: JSON.stringify({ WEBHOOK_URL: "https://hooks.example.com/sk-test-PLANTED-12345" }),
+    RUN_ID: "run-redaction",
+    SIM_TIMEOUT: "30",
+    HOME: tmp,
+  } as NodeJS.ProcessEnv;
+  const r = spawnSync("bash", [entry], { encoding: "utf8", env });
+  const stdoutClean = !(r.stdout ?? "").includes("sk-test-PLANTED-12345");
+  const uploaded = fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath, "utf8") : "";
+  check("entry.sh SECRETS_JSON: exit 0, planted value scrubbed from stdout + upload",
+    r.status === 0 && stdoutClean && uploaded.length > 0 && !uploaded.includes("sk-test-PLANTED-12345"),
+    { entryExit: r.status, stdoutLeak: !stdoutClean, uploadLeak: uploaded.includes("sk-test-PLANTED-12345"), stderrTail: r.stderr.split("\n").slice(-4) });
+  check("entry.sh SECRETS_JSON: marker replaced with ***", (r.stdout ?? "").includes("***"), {});
+  // Documented semantic: PARTIAL echoes (a substring of a secret, e.g. a key
+  // without its URL prefix) are not scrubbed - full-value masking is the
+  // contract (same as GitHub Actions masking); partials are Phase 4+ hardening.
+  fs.writeFileSync(
+    leakyFixture,
+    '2026-09-26T00:00:00Z [USER LOG] fmt: leaked fragment sk-test-PLANTED-12345\n✓ Workflow Simulation Result:\n"ok"\n',
+  );
+  const r2 = spawnSync("bash", [entry], { encoding: "utf8", env });
+  check("entry.sh redaction: partial-value echo is NOT scrubbed (documented semantic)",
+    (r2.stdout ?? "").includes("sk-test-PLANTED-12345"), {});
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+runEntryRedactionTest();
+
 // --- Secret Manager archive mode: CRE_SECRETS points at a session tgz file --
 
 function runEntrySecretsArchiveTest() {
@@ -325,6 +373,63 @@ function runStreamParityTest() {
   fs.rmSync(tmpEdge, { force: true });
 }
 runStreamParityTest();
+
+// --- Phase 3 redaction (classify.sh classify_redact vs scrubSecrets) ---------
+// Every emitted line - batch stdout, live ingest, and the GCS upload - must
+// have run-secret values scrubbed before it leaves the runner. Both emitters
+// implement the same fixed-string replacement; these checks pin parity and
+// the edge cases (values <4 chars skipped, multiple hits, hit at edges).
+
+function runRedactionTest() {
+  const valuesFile = path.join("/tmp", "sim-redact-values.txt");
+  fs.writeFileSync(valuesFile, "sk-test-PLANTED-12345\nhttps://hooks.example.com/TOKEN/abc\nabc\n");
+
+  const cases: [string, string][] = [
+    ["token is sk-test-PLANTED-12345, end", "token is ***, end"],
+    ["https://hooks.example.com/TOKEN/abc posted", "*** posted"],
+    ["twice sk-test-PLANTED-12345 and sk-test-PLANTED-12345 done", "twice *** and *** done"],
+    ["abc stays (3 chars, under the 4-char minimum)", "abc stays (3 chars, under the 4-char minimum)"],
+    ["sk-test-PLANTED-12345 at the very start", "*** at the very start"],
+    ["ends with sk-test-PLANTED-12345", "ends with ***"],
+    ["no secrets here", "no secrets here"],
+  ];
+  for (const [raw, expected] of cases) {
+    const bash = spawnSync("bash", ["-c", `printf '%s' "$0" | bash "$1" redact "$2"`, raw, classify, valuesFile], { encoding: "utf8" });
+    check(`redact bash: ${raw.slice(0, 40)}`, bash.stdout === expected, { got: bash.stdout, want: expected });
+    const ts = scrubSecrets(raw, loadSecretValues(valuesFile));
+    check(`redact TS parity: ${raw.slice(0, 40)}`, ts === expected && ts === bash.stdout, { ts, bash: bash.stdout, want: expected });
+  }
+
+  // Full-stream parity WITH redaction active: batch (classify.sh) and live
+  // (classifyLine+scrub) must agree byte-for-byte on a fixture whose USER LOG
+  // line carries a planted value.
+  const plantedLog = path.join("/tmp", "sim-redact-fixture.log");
+  fs.writeFileSync(
+    plantedLog,
+    '2026-09-26T00:00:00Z [USER LOG] fmt: replace -> key=sk-test-PLANTED-12345\n✓ Workflow Simulation Result:\n"ok"\n',
+  );
+  const values = loadSecretValues(valuesFile);
+  const lines = fs.readFileSync(plantedLog, "utf8").split("\n").filter((l) => l.length > 0);
+  const tsStream = lines.map((l) => scrubSecrets(l, values)).flatMap((l) => classifyLine(l)).join("\n") + "\n";
+  const bashInit = runClassify(["redacted-events", valuesFile, plantedLog]);
+  check("redact stream parity: batch == TS", bashInit.stdout === tsStream && bashInit.code === 0, {
+    bashInit: bashInit.stdout.slice(0, 160),
+    ts: tsStream.slice(0, 160),
+    code: bashInit.code,
+    stderr: bashInit.stderr.slice(0, 120),
+  });
+  check("redact: planted value absent from both streams",
+    !bashInit.stdout.includes("sk-test-PLANTED-12345") && !tsStream.includes("sk-test-PLANTED-12345"),
+    {});
+  check("redact: summary result block scrubbed", (() => {
+    const summary = runClassify(["redacted-summary", valuesFile, plantedLog, "0"]);
+    return !summary.stdout.includes("sk-test-PLANTED-12345");
+  })());
+
+  fs.rmSync(valuesFile, { force: true });
+  fs.rmSync(plantedLog, { force: true });
+}
+runRedactionTest();
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

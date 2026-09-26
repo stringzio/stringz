@@ -100,8 +100,30 @@ Two mount forms are supported (`CRE_SECRETS` overrides the path, default `/secre
 When the session dies between rotations, every run returns `status: auth_error` and exits 1.
 Alerting keys off that status; the owner re-logs and refreshes the secret.
 
-## Live stream (Phase 2)
+## Ephemeral run secrets (Phase 3)
 
+Cloud runs can carry run-scoped secrets (webhook URLs, API keys) that exist only
+inside the run's sandbox:
+
+- `SECRETS_URL` (signed GET, set via job env override) returns `{"ENV_VAR":"value"}`
+  JSON. A 404 means the run has no secrets. `SECRETS_JSON` is the local-dev
+  equivalent (env-delivered, same merge).
+- Values are appended to the project `.env` (mode 0600, tmpfs), and each value
+  (4+ chars) is written one-per-line to `$workdir/secrets.values`. Entry exports
+  its path as `SECRET_VALUES_FILE` and both emitters - the batch classifier
+  (`classify_redact`) and the live tailer (`scrubSecrets` in stream.ts) - replace
+  every occurrence of each value with `***` BEFORE a line is JSON-encoded or
+  emitted. The contract tests pin bash/TS parity and the edge cases. Values under
+  4 characters are never scrubbed (sub-string noise would destroy logs).
+- The API deletes the secrets object the moment a run reconciles to a terminal
+  state; the bucket lifecycle is the backstop. Secrets never touch the DB, the
+  job env, or any log.
+- Redaction semantic: FULL secret values are masked (the `console.log(secret)`
+  case, same contract as GitHub Actions masking). Partial echoes - a substring
+  of a secret logged without its prefix/suffix - are not masked; that is
+  accepted for the PoC and listed as Phase 4+ hardening.
+
+## Live stream (Phase 2)
 When the dispatch endpoint passes `INGEST_URL` + `INGEST_TOKEN` (per-run HMAC),
 entry.sh starts `lib/stream.ts` as a background tailer before the CLI runs:
 

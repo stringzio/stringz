@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, CircleDashed, Cloud, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, CircleDashed, Cloud, KeyRound, Loader2, XCircle } from "lucide-react";
 import Sheet from "../components/Sheet";
 import { isTerminal, type CloudRunState } from "../lib/cloudSim";
 
@@ -149,20 +149,77 @@ export function CloudRunDetail({ state }: { state: CloudRunState }) {
   );
 }
 
+/** Pre-flight secret entry (Phase 3): one password field per env-var secret
+ *  the compiled flow reads. Values go straight into the run's sandbox .env
+ *  and are destroyed when the run ends - never stored, never logged, and
+ *  scrubbed from every emitted log line by the runner. */
+function SecretPreflight({
+  requiredSecrets,
+  onStart,
+}: {
+  requiredSecrets: string[];
+  onStart: (secrets: Record<string, string>) => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const complete = requiredSecrets.every((s) => (values[s] ?? "").trim().length > 0);
+
+  return (
+    <div>
+      <p className="mb-1 flex items-center gap-1.5 rounded-2xl bg-[#E9F0F7] px-4 py-3 text-[11.5px] leading-snug text-[#3d5f8a]">
+        <KeyRound size={14} className="shrink-0" />
+        This flow reads secrets at run time. Paste them once - they exist only inside this run&apos;s isolated sandbox
+        and are destroyed when it ends. Stringz never stores or logs them, and the runner scrubs them from every log
+        line.
+      </p>
+      <div className="space-y-3">
+        {requiredSecrets.map((name) => (
+          <div key={name}>
+            <div className="mb-1 font-mono text-[11px] font-bold text-[#1a1a1a]">{name}</div>
+            <input
+              type="password"
+              autoComplete="off"
+              placeholder={`Paste ${name}`}
+              value={values[name] ?? ""}
+              onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
+              className="w-full rounded-2xl bg-gray-50 px-4 py-3 font-mono text-[12.5px] outline-none ring-1 ring-black/[0.06] focus:ring-2 focus:ring-[#3d5f8a]/50"
+            />
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={() => onStart(Object.fromEntries(requiredSecrets.map((s) => [s, values[s].trim()])))}
+        disabled={!complete}
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#1a1a1a] py-3.5 text-[14px] font-semibold text-white transition active:scale-[0.98] disabled:opacity-40"
+      >
+        <Cloud size={15} /> Start cloud run
+      </button>
+    </div>
+  );
+}
+
 export default function CloudRunSheet({
   open,
   onClose,
   state,
+  requiredSecrets,
+  onStart,
 }: {
   open: boolean;
   onClose: () => void;
   state: CloudRunState | null;
+  /** Env-var secrets the compiled flow needs; empty = start immediately. */
+  requiredSecrets: string[];
+  onStart: (secrets: Record<string, string>) => void;
 }) {
   return (
     <Sheet open={open} onClose={onClose} title="Test in cloud">
-      {state ? <CloudRunDetail state={state} /> : (
+      {state ? (
+        <CloudRunDetail state={state} />
+      ) : requiredSecrets.length > 0 ? (
+        <SecretPreflight requiredSecrets={requiredSecrets} onStart={onStart} />
+      ) : (
         <div className="flex items-center gap-2 rounded-2xl bg-gray-50 px-4 py-3 text-[12.5px] text-gray-500">
-          <CircleDashed size={15} /> No cloud run yet - press Test in cloud on the canvas to start one.
+          <CircleDashed size={15} /> Preparing your cloud run…
         </div>
       )}
     </Sheet>
