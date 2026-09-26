@@ -149,6 +149,30 @@ function parseNdjson(stdout: string): NdjsonEvent[] {
 // Runs the real entry.sh end to end in FILE mode with a stubbed cre binary on
 // PATH (plus a GNU-timeout stand-in for hosts without coreutils, e.g. macOS).
 
+// GNU timeout stand-in (macOS has none): timeout [-k K] DURATION CMD...
+const TIMEOUT_STUB =
+  '#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in\n    -k) shift 2 ;;\n    -*|[0-9]*) shift ;;\n    *) break ;;\n  esac\ndone\nexec "$@"\n';
+
+function writeStubBin(stubDir: string, fixtureAbs: string, stubExit: string) {
+  fs.writeFileSync(
+    path.join(stubDir, "cre"),
+    `#!/usr/bin/env bash\ncat "${fixtureAbs}"\nexit ${stubExit}\n`,
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(path.join(stubDir, "timeout"), TIMEOUT_STUB, { mode: 0o755 });
+}
+
+function makeProjectTgz(tmp: string): string {
+  const projDir = path.join(tmp, "proj");
+  fs.mkdirSync(path.join(projDir, "demo-workflow"), { recursive: true });
+  fs.writeFileSync(path.join(projDir, "project.yaml"), 'name: "demo"\n');
+  fs.writeFileSync(path.join(projDir, ".env.example"), "CRE_ETH_PRIVATE_KEY=\n");
+  fs.writeFileSync(path.join(projDir, "demo-workflow", "package.json"), '{"name":"demo-workflow","private":true}\n');
+  const tgz = path.join(tmp, "project.tgz");
+  spawnSync("tar", ["-czf", tgz, "-C", projDir, "."], { stdio: "inherit" });
+  return tgz;
+}
+
 function runEntryStubTests() {
   const cases: Array<[string, string, number, string]> = [
     ["success.log", "0", 0, "succeeded"],
@@ -160,25 +184,8 @@ function runEntryStubTests() {
     const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
     const stubDir = path.join(tmp, "bin");
     fs.mkdirSync(stubDir);
-    const fixtureAbs = path.join(fixtures, fixture);
-    fs.writeFileSync(
-      path.join(stubDir, "cre"),
-      `#!/usr/bin/env bash\ncat "${fixtureAbs}"\nexit ${stubExit}\n`,
-      { mode: 0o755 },
-    );
-    // GNU timeout stand-in (macOS has none): timeout [-k K] DURATION CMD...
-    fs.writeFileSync(
-      path.join(stubDir, "timeout"),
-      '#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in\n    -k) shift 2 ;;\n    -*|[0-9]*) shift ;;\n    *) break ;;\n  esac\ndone\nexec "$@"\n',
-      { mode: 0o755 },
-    );
-    const projDir = path.join(tmp, "proj");
-    fs.mkdirSync(path.join(projDir, "demo-workflow"), { recursive: true });
-    fs.writeFileSync(path.join(projDir, "project.yaml"), 'name: "demo"\n');
-    fs.writeFileSync(path.join(projDir, ".env.example"), "CRE_ETH_PRIVATE_KEY=\n");
-    fs.writeFileSync(path.join(projDir, "demo-workflow", "package.json"), '{"name":"demo-workflow","private":true}\n');
-    const tgz = path.join(tmp, "project.tgz");
-    spawnSync("tar", ["-czf", tgz, "-C", projDir, "."], { stdio: "inherit" });
+    writeStubBin(stubDir, path.join(fixtures, fixture), stubExit);
+    const tgz = makeProjectTgz(tmp);
     const entry = path.join(root, "entry.sh");
     const env = {
       ...process.env,
@@ -197,6 +204,44 @@ function runEntryStubTests() {
   }
 }
 runEntryStubTests();
+
+// --- RESULT_URL mirror: entry.sh uploads the event stream --------------------
+
+function runEntryResultUrlTest() {
+  const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
+  const stubDir = path.join(tmp, "bin");
+  fs.mkdirSync(stubDir);
+  writeStubBin(stubDir, path.join(fixtures, "success.log"), "0");
+  const tgz = makeProjectTgz(tmp);
+  const eventsPath = path.join(tmp, "events.ndjson");
+  const entry = path.join(root, "entry.sh");
+  const env = {
+    ...process.env,
+    PATH: `${stubDir}:${process.env.PATH}`,
+    SRC_URL: `file://${tgz}`,
+    RESULT_URL: `file://${eventsPath}`,
+    RUN_ID: "run-result-url",
+    SIM_TIMEOUT: "30",
+    HOME: tmp,
+  } as NodeJS.ProcessEnv;
+  const r = spawnSync("bash", [entry], { encoding: "utf8", env });
+  const written = fs.existsSync(eventsPath);
+  check("entry.sh RESULT_URL=file://: exit 0 and events file written",
+    r.status === 0 && written,
+    { entryExit: r.status, stderrTail: r.stderr.split("\n").slice(-3) });
+  if (written) {
+    const lines = fs.readFileSync(eventsPath, "utf8").split("\n").filter((l) => l.length > 0);
+    const last = lines.length > 0 ? (JSON.parse(lines[lines.length - 1]) as NdjsonEvent) : null;
+    check("entry.sh RESULT_URL=file://: last line is the result event",
+      last?.t === "result" && last.status === "succeeded" && last.runId === "run-result-url", last);
+    const stdoutLines = (r.stdout ?? "").split("\n").filter((l) => l.length > 0);
+    check("entry.sh RESULT_URL=file://: uploaded stream matches stdout",
+      lines.length === stdoutLines.length && lines.every((l, i) => l === stdoutLines[i]),
+      { uploaded: lines.length, stdout: stdoutLines.length });
+  }
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+runEntryResultUrlTest();
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

@@ -16,6 +16,7 @@ Nothing here touches `.github/workflows`, `server/`, `src/`, or any GCP resource
 | Variable      | Required | Default           | Meaning                                                        |
 | ------------- | -------- | ----------------- | -------------------------------------------------------------- |
 | `SRC_URL`     | yes      |                   | Signed HTTPS URL (GCS) or `file://` absolute path to a gzipped tarball of the CRE project root. |
+| `RESULT_URL`  | no       |                   | Signed HTTPS PUT URL (GCS) or `file://` absolute path. The NDJSON event stream is uploaded there after the run. Upload failure is a stderr warning only and never changes the status or exit code. |
 | `RUN_ID`      | no       |                   | Echoed into the final result event and stderr diagnostics.     |
 | `TRIGGER_IDX` | no       | `0`               | `--trigger-index` for the CLI.                                 |
 | `TARGET`      | no       | `staging-settings`| `--target` for the CLI.                                        |
@@ -26,6 +27,10 @@ Nothing here touches `.github/workflows`, `server/`, `src/`, or any GCP resource
 
 STDOUT is a pure NDJSON stream, one JSON object per line.
 STDERR carries runner diagnostics prefixed with `[sim-entry]`.
+
+When `RESULT_URL` is set, the same NDJSON stream is uploaded there after the run via a signed HTTPS PUT or a plain `file://` copy.
+This is best effort: an upload failure is a stderr warning and never changes the run status or exit code.
+The orchestrator reconciles run state from the uploaded stream, so STDOUT stays the only real-time channel.
 
 Event types:
 
@@ -116,7 +121,7 @@ The warm `bun install` layer pins the exact dependency set of generated projects
 
 ```bash
 # Cloud Run target (from repo root)
-runner/build.sh us-central1-docker.pkg.dev/stringz-479300/stringz/sim-runner:phase1 linux/amd64
+runner/build.sh us-central1-docker.pkg.dev/project-1b9280b0-8678-4006-a48/flowkit/sim-runner:local linux/amd64
 
 # Apple Silicon local dev
 runner/build.sh sim-runner:local linux/arm64
@@ -155,7 +160,7 @@ The tests exercise `runner/lib/classify.sh` (the same functions the entrypoint s
 - 1 vCPU, 1 GiB memory per task.
 - Task timeout 90-180s (the runner's `SIM_TIMEOUT` must stay below the task timeout).
 - `maxRetries: 0`; retries are the caller's decision, not the platform's.
-- Env: `SRC_URL` (signed at dispatch), `RUN_ID`, `TRIGGER_IDX`, `TARGET`, `SIM_TIMEOUT`.
+- Env: `SRC_URL` (signed at dispatch), `RESULT_URL` (signed at dispatch), `RUN_ID`, `TRIGGER_IDX`, `TARGET`, `SIM_TIMEOUT`.
 - Secret volume: the `cre` session mounted read-only at `/secrets/cre`.
 
 ## Egress requirements

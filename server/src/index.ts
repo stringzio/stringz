@@ -10,6 +10,7 @@ import { db } from "./db/client";
 import { getSessionUser, SESSION_COOKIE } from "./session";
 import { oauthApp } from "./oauth";
 import { applyBillingEvent, getProvider } from "./billing";
+import { cloudSimEnabled, verifyDispatchToken, dispatchRun } from "./sim";
 import { chainId } from "../../src/lib/chainIds";
 
 await migrate(db, { migrationsFolder: resolve(import.meta.dir, "db/migrations") });
@@ -57,6 +58,26 @@ app.get("/api/abi", async (c) => {
     });
   } catch {
     return c.json({ ok: false, error: "ABI lookup failed - try again." }, 502);
+  }
+});
+
+// Cloud simulation dispatch: Cloud Tasks POSTs here (OIDC-verified) to start
+// the Cloud Run Job for a queued run.
+app.post("/sim-dispatch", async (c) => {
+  if (!cloudSimEnabled) return c.json({ ok: false, error: "Cloud simulation is not enabled on this instance" }, 503);
+  const audience = `${process.env.PUBLIC_APP_URL ?? "http://localhost:3000"}/sim-dispatch`;
+  const auth = c.req.header("Authorization");
+  if (!(await verifyDispatchToken(auth, audience))) return c.json({ ok: false }, 401);
+  try {
+    const body = (await c.req.json().catch(() => null)) as { runId?: unknown } | null;
+    const runId = typeof body?.runId === "string" ? body.runId : "";
+    if (!runId) return c.json({ ok: false, error: "runId is required" }, 400);
+    const outcome = await dispatchRun(runId);
+    if (outcome === "not-found") return c.json({ ok: false }, 404);
+    if (outcome === "not-queued") return c.json({ ok: false }, 409);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ ok: false, error: err instanceof Error ? err.message : "dispatch failed" }, 500);
   }
 });
 

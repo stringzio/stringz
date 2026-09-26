@@ -103,3 +103,23 @@ export const onboarding = pgTable("onboarding", {
   newsletter: boolean("newsletter").notNull().default(false),
   createdAt: text("created_at").notNull(),
 }, (t) => [uniqueIndex("onboarding_user_unique").on(t.userId)]);
+
+// ── cloud simulation runs ───────────────────────────────────────────────────
+// One enqueue -> one row. The Cloud Tasks queue POSTs /sim-dispatch, the API
+// starts the Cloud Run Job, and the runner uploads its NDJSON event stream;
+// polling reconciles the row from the uploaded result object.
+
+/** One cloud simulation run executed by the sim runner. */
+export const simulationRuns = pgTable("simulation_runs", {
+  id: text("id").primaryKey(), // crypto.randomUUID()
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  flowId: text("flow_id"), // nullable on purpose: runs may come from unsaved drafts (no FK)
+  status: text("status").notNull(), // queued | running | succeeded | failed | auth_error | timeout
+  triggerIdx: integer("trigger_idx").notNull().default(0),
+  exitCode: integer("exit_code"),
+  result: text("result"), // CLI result payload on success
+  errorClass: text("error_class"), // runner status when failed: failed | auth_error | timeout | stale
+  srcGcsUri: text("src_gcs_uri"), // gs:// URI of the uploaded project archive
+  createdAt: text("created_at").notNull(), // ISO
+  updatedAt: text("updated_at").notNull(), // ISO
+}, (t) => [index("simulation_runs_user_idx").on(t.userId)]);

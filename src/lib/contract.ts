@@ -131,6 +131,40 @@ export const runRecordSchema = z.object({
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 
+// ── cloud simulation ─────────────────────────────────────────────────────────
+
+export const simulateEnqueueInput = z.object({
+  flowId: z.string().uuid().nullish(),
+  triggerIdx: z.number().int().min(0).max(100).default(0),
+});
+export type SimulateEnqueueInput = z.infer<typeof simulateEnqueueInput>;
+
+export const simulateEnqueueResponseSchema = z.object({
+  runId: z.string(),
+  uploadUrl: z.string(),
+  uploadExpiresAt: z.string(),
+  status: z.string(),
+});
+export type SimulateEnqueueResponse = z.infer<typeof simulateEnqueueResponseSchema>;
+
+export const simulateRunSchema = z.object({
+  id: z.string(),
+  flowId: z.string().nullable(),
+  status: z.string(),
+  triggerIdx: z.number(),
+  exitCode: z.number().nullable(),
+  result: z.string().nullable(),
+  errorClass: z.string().nullable(),
+  srcGcsUri: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  events: z.array(z.record(z.string(), z.unknown())),
+});
+export type SimulateRun = z.infer<typeof simulateRunSchema>;
+
+export const simulateListResponseSchema = z.array(simulateRunSchema.omit({ events: true }));
+export type SimulateListResponse = z.infer<typeof simulateListResponseSchema>;
+
 // ── result wrappers ──────────────────────────────────────────────────────
 
 export const waitlistJoinResult = z.object({

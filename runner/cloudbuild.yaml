@@ -1,0 +1,23 @@
+# Cloud Build config for the simulation runner image (Phase 1).
+# Invoked by .github/workflows/ci.yml (runner-image job) and manually per
+# INFRA.md. The runner needs no build secrets; the CRE session it runs with
+# is mounted at runtime from Secret Manager, never baked into the image.
+# The CRE CLI / javy downloads are ~80MB over a CDN on a cold build.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_IMAGE_TAG}
+      - --platform
+      - linux/amd64
+      - -f
+      - runner/Dockerfile
+      - runner
+    timeout: 1200s
+
+images:
+  - ${_IMAGE_TAG}
+
+substitutions:
+  _IMAGE_TAG: required

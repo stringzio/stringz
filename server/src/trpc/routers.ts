@@ -18,8 +18,19 @@ import {
   onboardingSubmitInput,
   runRecordInput,
   runRecordSchema,
+  simulateEnqueueInput,
+  simulateRunSchema,
+  simulateListResponseSchema,
   type PublicUser,
 } from "../../../src/lib/contract";
+import {
+  assertCloudSimEnabled,
+  srcObjectUri,
+  signUploadUrl,
+  enqueueTask,
+  reconcileRun,
+  PROJECT_UPLOAD_TTL_MS,
+} from "../sim";
 
 const toPublicUser = (u: {
   id: string;
@@ -52,6 +63,19 @@ const publicConfig = {
   github: !!process.env.GITHUB_CLIENT_ID,
   apple: false, // requires an Apple Developer account
 };
+
+const runShape = (r: typeof schema.simulationRuns.$inferSelect) => ({
+  id: r.id,
+  flowId: r.flowId,
+  status: r.status,
+  triggerIdx: r.triggerIdx,
+  exitCode: r.exitCode,
+  result: r.result,
+  errorClass: r.errorClass,
+  srcGcsUri: r.srcGcsUri,
+  createdAt: r.createdAt,
+  updatedAt: r.updatedAt,
+});
 
 export const appRouter = router({
   config: router({
@@ -270,6 +294,64 @@ export const appRouter = router({
           }),
         );
       }),
+  }),
+
+  simulate: router({
+    /** Reserve a run row + signed upload URL, then push a dispatch task. The client PUTs the project tarball before the task fires. */
+    enqueue: protectedProcedure.input(simulateEnqueueInput).mutation(async ({ input, ctx }) => {
+      assertCloudSimEnabled();
+      const [inflight] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(schema.simulationRuns)
+        .where(sql`${schema.simulationRuns.userId} = ${ctx.user.id} and ${schema.simulationRuns.status} in ('queued', 'running')`);
+      if ((inflight?.count ?? 0) >= 3) {
+        throw new Error("Too many simulations in flight (max 3) - wait for one to finish.");
+      }
+      const runId = randomUUID();
+      const now = new Date().toISOString();
+      await db.insert(schema.simulationRuns).values({
+        id: runId,
+        userId: ctx.user.id,
+        flowId: input.flowId ?? null,
+        status: "queued",
+        triggerIdx: input.triggerIdx,
+        srcGcsUri: srcObjectUri(runId),
+        createdAt: now,
+        updatedAt: now,
+      });
+      try {
+        await enqueueTask(runId);
+      } catch (err) {
+        await db.delete(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId));
+        throw err;
+      }
+      const uploadUrl = await signUploadUrl(runId);
+      return {
+        runId,
+        uploadUrl,
+        uploadExpiresAt: new Date(Date.now() + PROJECT_UPLOAD_TTL_MS).toISOString(),
+        status: "queued",
+      };
+    }),
+
+    /** One run's state, reconciled against the uploaded result object. */
+    status: protectedProcedure.input(z.object({ runId: z.string().uuid() })).query(async ({ input, ctx }) => {
+      const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, input.runId)).limit(1);
+      if (!row || row.userId !== ctx.user.id) throw new Error("Not found");
+      const reconciled = await reconcileRun(row);
+      return simulateRunSchema.parse({ ...runShape(reconciled.row), events: reconciled.events });
+    }),
+
+    /** Recent runs for the Simulations screen; aggregations happen client-side. */
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await db
+        .select()
+        .from(schema.simulationRuns)
+        .where(eq(schema.simulationRuns.userId, ctx.user.id))
+        .orderBy(sql`${schema.simulationRuns.createdAt} desc`)
+        .limit(50);
+      return rows.map((r) => simulateListResponseSchema.element.parse(runShape(r)));
+    }),
   }),
 });
 
