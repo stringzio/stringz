@@ -81,6 +81,10 @@ FROM oven/bun:${BUN_TAG} AS warm
 ARG JAVY_VERSION
 # javy first so the cre-setup postinstall finds it cached and skips the CDN.
 COPY --from=javy-builder --chown=bun:bun /out/cache /home/bun/.cache
+# The classic builder (Cloud Build) creates WORKDIR as root; buildkit creates
+# it as the current user. Without this, `bun install` below fails with EACCES
+# creating node_modules in a root-owned /opt/warm.
+RUN mkdir -p /opt/warm && chown bun:bun /opt/warm
 USER bun
 ENV HOME=/home/bun
 WORKDIR /opt/warm
