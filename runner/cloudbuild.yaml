@@ -3,6 +3,9 @@
 # INFRA.md. The runner needs no build secrets; the CRE session it runs with
 # is mounted at runtime from Secret Manager, never baked into the image.
 # The CRE CLI / javy downloads are ~80MB over a CDN on a cold build.
+# Cloud Build's docker step uses the classic builder: buildx's automatic
+# TARGETPLATFORM is not injected, so pass it explicitly (the Dockerfile
+# declares the ARG in every stage that reads it).
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
@@ -11,6 +14,8 @@ steps:
       - ${_IMAGE_TAG}
       - --platform
       - linux/amd64
+      - --build-arg
+      - TARGETPLATFORM=linux/amd64
       - -f
       - runner/Dockerfile
       - runner
