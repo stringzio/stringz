@@ -119,6 +119,8 @@ COPY --from=warm --chown=bun:bun /home/bun/.bun /home/bun/.bun
 COPY entry.sh /usr/local/bin/sim-entry
 COPY egress-init.sh /usr/local/bin/egress-init
 COPY lib/classify.sh /usr/local/lib/sim/classify.sh
+COPY lib/stream.ts /usr/local/lib/sim/stream.ts
+COPY lib/stream-classify.ts /usr/local/lib/sim/stream-classify.ts
 RUN chmod 0755 /usr/local/bin/sim-entry /usr/local/bin/egress-init /usr/local/lib/sim/classify.sh /usr/local/bin/cre
 # Root only so egress-init can edit /etc/hosts; the workload itself drops to
 # the bun user inside egress-init before execing sim-entry.

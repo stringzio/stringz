@@ -28,6 +28,8 @@ Nothing here touches `.github/workflows`, `server/`, `src/`, or any GCP resource
 
 STDOUT is a pure NDJSON stream, one JSON object per line.
 STDERR carries runner diagnostics prefixed with `[sim-entry]`.
+When `INGEST_URL`/`INGEST_TOKEN` are set, a live tailer (`lib/stream.ts`) also
+streams the same events to the API during execution (see "Live stream" below).
 
 When `RESULT_URL` is set, the same NDJSON stream is uploaded there after the run via a signed HTTPS PUT or a plain `file://` copy.
 This is best effort: an upload failure is a stderr warning and never changes the run status or exit code.
@@ -97,6 +99,25 @@ Two mount forms are supported (`CRE_SECRETS` overrides the path, default `/secre
 
 When the session dies between rotations, every run returns `status: auth_error` and exits 1.
 Alerting keys off that status; the owner re-logs and refreshes the secret.
+
+## Live stream (Phase 2)
+
+When the dispatch endpoint passes `INGEST_URL` + `INGEST_TOKEN` (per-run HMAC),
+entry.sh starts `lib/stream.ts` as a background tailer before the CLI runs:
+
+- It tails the raw CLI log, classifies each new line with `lib/stream-classify.ts`,
+  and POSTs event batches (up to 200, at most ~1s apart) to `INGEST_URL` with the
+  `x-run-token` header. Classification is byte-for-byte identical to the batch
+  path (`classify.sh`); the contract tests pin parity on every fixture.
+- After the CLI exits, entry.sh writes the result event to
+  `<workdir>/result-event.json` and touches `<workdir>/cli-done`. The tailer
+  drains the log, flushes, posts the result event last, and exits. entry.sh
+  waits up to 30s for that before continuing to the stdout/RESULT_URL emission.
+- Best effort by contract: ingest failures are stderr warnings only, the tailer
+  gives up after 3 consecutive failures, and the run's status and exit code
+  never depend on the live stream. The GCS result upload stays canonical.
+- Local runs can point `INGEST_URL` at `runner/test/e2e-local.sh`'s capture
+  server; the script fails unless the captured live stream equals stdout.
 
 ## Version pins
 

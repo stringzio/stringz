@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { classifyLine } from "../lib/stream-classify";
 
 const root = path.resolve(import.meta.dir, "..");
 const classify = path.join(root, "lib", "classify.sh");
@@ -284,6 +285,46 @@ function runEntrySecretsArchiveTest() {
   fs.rmSync(src, { recursive: true, force: true });
 }
 runEntrySecretsArchiveTest();
+
+// --- live-stream classifier parity (stream-classify.ts vs classify.sh) ------
+// entry.sh emits the completed stream from classify.sh; the Phase 2 tailer
+// emits the live stream from stream-classify.ts. Both streams reach the same
+// consumer, so per-line output must be byte-identical on the fixtures.
+
+function runStreamParityTest() {
+  for (const name of ["success.log", "auth-failure.log", "write-failure.log", "auth-no-credentials.log"]) {
+    const file = path.join(fixtures, name);
+    const raw = fs.readFileSync(file, "utf8");
+    const lines = raw.split("\n");
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    const tsStream = lines.flatMap((l) => classifyLine(l)).join("\n") + "\n";
+    const bash = runClassify(["events", file]);
+    check(`stream parity: ${name} matches classify.sh events`, tsStream === bash.stdout, {
+      fixture: name,
+      tsLines: tsStream.split("\n").length,
+      bashLines: bash.stdout.split("\n").length,
+      firstDiff: tsStream.split("\n").findIndex((l, i) => l !== bash.stdout.split("\n")[i]),
+    });
+  }
+  // Edge cases: quoting, backslashes, tabs, unicode, node-id trailing spaces.
+  const edge = [
+    'plain line',
+    'quote " and backslash \\ and tab\tend',
+    '2026-09-26T00:00:00Z [USER LOG] fmt: replace -> ETH/USD = $2689.62',
+    '2026-09-26T00:00:00Z [USER LOG] spaced-id   : trailing spaces in id',
+    'unicode box-drawing ✓ and emoji 🚀',
+  ];
+  const tmpEdge = path.join("/tmp", "sim-parity-edge.log");
+  fs.writeFileSync(tmpEdge, edge.join("\n") + "\n");
+  const tsEdge = edge.flatMap((l) => classifyLine(l)).join("\n") + "\n";
+  const bashEdge = runClassify(["events", tmpEdge]);
+  check("stream parity: edge cases match classify.sh events", tsEdge === bashEdge.stdout, {
+    tsEdge: tsEdge.split("\n").slice(0, 3),
+    bashEdge: bashEdge.stdout.split("\n").slice(0, 3),
+  });
+  fs.rmSync(tmpEdge, { force: true });
+}
+runStreamParityTest();
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

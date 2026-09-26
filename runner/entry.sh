@@ -20,6 +20,11 @@
 #                 (Secret Manager volume mounts deliver the payload as one
 #                 file - base64-encoded session tar.gz per the rotation
 #                 runbook, decoded by entry.sh into $HOME/.cre).
+#   INGEST_URL    optional (Phase 2). API endpoint that accepts live event
+#                 batches; set via job env override at dispatch. Absent in
+#                 local runs: the live tailer stays off.
+#   INGEST_TOKEN  optional (Phase 2). Per-run HMAC token for INGEST_URL,
+#                 delivered the same way. Never logged.
 #
 # OUTPUT CONTRACT
 #   stdout: pure NDJSON event stream, one object per line.
@@ -53,6 +58,17 @@ fi
 # shellcheck source=lib/classify.sh
 . "$SIM_LIB" || die "cannot source classify.sh at $SIM_LIB"
 
+# --- locate stream.ts the same way (live tailer, Phase 2; may not exist in
+# older image builds - the tailer is optional, so absence only disables it)
+STREAM_TS="${STREAM_TS:-}"
+if [ -z "$STREAM_TS" ]; then
+  if [ -f /usr/local/lib/sim/stream.ts ]; then
+    STREAM_TS=/usr/local/lib/sim/stream.ts
+  else
+    STREAM_TS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/stream.ts"
+  fi
+fi
+
 # --- egress scrub: strip ambient proxy and metadata overrides so traffic only
 # goes where this script sends it. The runner never uses a proxy, and GCS is
 # reached via signed URLs, not application-default credentials, so nothing in
@@ -79,6 +95,18 @@ proj="$workdir/project"
 mkdir -p "$proj" || die "cannot create project dir"
 rawlog="$workdir/raw.log"
 : > "$rawlog"
+
+# --- live stream tailer (Phase 2). Best effort: INGEST_URL/INGEST_TOKEN
+# arrive as job env overrides; a tailer problem must never change the run
+# outcome, so nothing here is fatal.
+stream_pid=""
+if [ -n "${INGEST_URL:-}" ] && [ -n "${INGEST_TOKEN:-}" ] && [ -f "$STREAM_TS" ]; then
+  INGEST_URL="$INGEST_URL" INGEST_TOKEN="$INGEST_TOKEN" bun "$STREAM_TS" "$rawlog" "$workdir" >&2 &
+  stream_pid=$!
+  log "live stream tailer started pid=$stream_pid"
+elif [ -n "${INGEST_URL:-}" ]; then
+  log "WARN INGEST_URL set but stream.ts missing at $STREAM_TS; live stream disabled"
+fi
 
 # --- fetch the project archive
 tgz="$workdir/project.tgz"
@@ -184,6 +212,25 @@ timeout -k 10 "$SIM_TIMEOUT" cre workflow simulate "$wfdir" \
 cli_code=$?
 cd - >/dev/null || true
 log "CLI exited code=$cli_code (informational only; status comes from output markers)"
+
+# --- live stream: hand the tailer its terminal event and let it flush. The
+# result event must be posted after every log/node event, so it goes to the
+# file before the done marker, and we wait for the tailer to exit.
+if [ -n "$stream_pid" ]; then
+  classify_emit_summary "$rawlog" "$cli_code" "$RUN_ID" > "$workdir/result-event.json"
+  : > "$workdir/cli-done"
+  waited=0
+  while kill -0 "$stream_pid" 2>/dev/null && [ "$waited" -lt 60 ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  if kill -0 "$stream_pid" 2>/dev/null; then
+    log "WARN tailer did not exit in 30s; killing it (run unaffected)"
+    kill "$stream_pid" 2>/dev/null || true
+  fi
+  wait "$stream_pid" 2>/dev/null || true
+  log "live stream tailer finished"
+fi
 
 # --- stream events: raw CLI lines first, then the terminal result event.
 # The stream is also mirrored into $events for the optional RESULT_URL upload.
