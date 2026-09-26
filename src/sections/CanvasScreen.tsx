@@ -527,26 +527,12 @@ export default function CanvasScreen({
     showToast(pinned[id] ? "Pin removed" : "Output pinned for the next run");
   };
 
-  /** "Test in cloud" (Phase 2): compile, pack, upload, and watch the live stream. */
-  const testInCloud = () => {
-    if (cloud && !isTerminal(cloud.phase)) {
-      setSheet("cloudrun");
-      return;
-    }
-    let tarball: Uint8Array;
-    try {
-      const result = compileFlow(wfName, nodes, edges);
-      tarball = packTarGz(Object.entries(result.creFiles).map(([path, contents]) => ({ path, content: contents })));
-    } catch (err) {
-      showToast(err instanceof BlueprintError ? err.message : "Could not compile this flow for a cloud run");
-      return;
-    }
-    cloudAbort.current?.abort();
-    const ac = new AbortController();
-    cloudAbort.current = ac;
+  /** "Test in cloud" (Phase 2 + 3): compile, pack, collect run secrets when the
+   *  flow needs them, upload, and watch the live stream. */
+  const [cloudSecretsNeeded, setCloudSecretsNeeded] = useState<string[]>([]);
+  const startCloudRun = (tarball: Uint8Array, secrets: Record<string, string>, ac: AbortController) => {
     setCloud({ phase: "preparing", runId: null, events: [], startedAt: Date.now() });
-    setSheet("cloudrun");
-    void runCloudSimulation({ tarball, onState: setCloud, signal: ac.signal })
+    void runCloudSimulation({ tarball, secrets, onState: setCloud, signal: ac.signal })
       .then((finalState) => {
         if (finalState.phase === "succeeded") {
           // Attach real per-node cloud outputs to the RunData panel,
@@ -575,6 +561,30 @@ export default function CanvasScreen({
         );
         showToast(note);
       });
+  };
+
+  const testInCloud = () => {
+    if (cloud && !isTerminal(cloud.phase)) {
+      setSheet("cloudrun");
+      return;
+    }
+    let tarball: Uint8Array;
+    let required: string[];
+    try {
+      const result = compileFlow(wfName, nodes, edges);
+      tarball = packTarGz(Object.entries(result.creFiles).map(([path, contents]) => ({ path, content: contents })));
+      required = result.requiredSecrets;
+    } catch (err) {
+      showToast(err instanceof BlueprintError ? err.message : "Could not compile this flow for a cloud run");
+      return;
+    }
+    cloudAbort.current?.abort();
+    const ac = new AbortController();
+    cloudAbort.current = ac;
+    setCloud(null);
+    setCloudSecretsNeeded(required);
+    setSheet("cloudrun");
+    if (required.length === 0) startCloudRun(tarball, {}, ac);
   };
 
   // ---------- add / remove ----------
@@ -1839,7 +1849,24 @@ cd .. && cre workflow simulate ${flowSlug}-workflow --target staging-settings`}<
         </p>
       </Sheet>
 
-      <CloudRunSheet open={sheet === "cloudrun"} onClose={() => setSheet(null)} state={cloud} />
+      <CloudRunSheet
+        open={sheet === "cloudrun"}
+        onClose={() => setSheet(null)}
+        state={cloud}
+        requiredSecrets={cloudSecretsNeeded}
+        onStart={(secrets) => {
+          try {
+            const result = compileFlow(wfName, nodes, edges);
+            startCloudRun(
+              packTarGz(Object.entries(result.creFiles).map(([path, content]) => ({ path, content }))),
+              secrets,
+              cloudAbort.current ?? new AbortController(),
+            );
+          } catch (err) {
+            showToast(err instanceof BlueprintError ? err.message : "Could not compile this flow for a cloud run");
+          }
+        }}
+      />
       <Toast toast={toast} />
       <ProSheet open={!!proFeature} onClose={() => setProFeature(null)} feature={proFeature ?? undefined} />
     </div>

@@ -27,6 +27,40 @@ CLASSIFY_OK_MARKER="Workflow Simulation Result"
 CLASSIFY_AUTH_MARKER="Credential validation failed"
 CLASSIFY_AUTH_MARKER_2="authentication required: no credentials found"
 
+# Redaction (Phase 3): when SECRET_VALUES_FILE points at a file of secret
+# values (one per line), every raw line is scrubbed of those values (replaced
+# with ***) BEFORE JSON encoding or emission. Values shorter than 4 chars are
+# skipped - scrubbing tiny substrings would destroy logs. init is called by
+# sim-entry after the secrets merge; the contract tests exercise it directly.
+CLASSIFY_SECRETS_FILE=""
+classify_redact_init() {
+  CLASSIFY_SECRETS_FILE="${1:-}"
+}
+
+classify_redact() {
+  local line="$1"
+  if [ -z "$CLASSIFY_SECRETS_FILE" ] || [ ! -f "$CLASSIFY_SECRETS_FILE" ]; then
+    printf '%s' "$line"
+    return
+  fi
+  REDACT_LINE="$line" REDACT_FILE="$CLASSIFY_SECRETS_FILE" awk '
+    BEGIN {
+      line = ENVIRON["REDACT_LINE"]; file = ENVIRON["REDACT_FILE"]
+      n = 0
+      while ((getline v < file) > 0) { if (length(v) >= 4) vals[n++] = v }
+      close(file)
+      for (i = 0; i < n; i++) {
+        v = vals[i]
+        pos = index(line, v)
+        while (pos > 0) {
+          line = substr(line, 1, pos - 1) "***" substr(line, pos + length(v))
+          pos = index(line, v)
+        }
+      }
+      printf "%s", line
+    }'
+}
+
 classify_status() {
   local raw="$1" code="${2:-0}"
   if grep -qF -e "$CLASSIFY_AUTH_MARKER" -e "$CLASSIFY_AUTH_MARKER_2" "$raw"; then
@@ -60,10 +94,11 @@ classify_json_encode() {
 classify_emit_events() {
   local raw="$1"
   while IFS= read -r line || [ -n "$line" ]; do
-    local esc
-    esc="$(classify_json_encode "$line")"
+    local scrubbed esc
+    scrubbed="$(classify_redact "$line")"
+    esc="$(classify_json_encode "$scrubbed")"
     printf '{"t":"log","line":"%s"}\n' "$esc"
-    if [[ "$line" =~ \[USER\ LOG\][[:space:]]+([^:]+): ]]; then
+    if [[ "$scrubbed" =~ \[USER\ LOG\][[:space:]]+([^:]+): ]]; then
       local id="${BASH_REMATCH[1]}"
       id="${id%"${id##*[![:space:]]}"}"
       printf '{"t":"node","id":"%s","line":"%s"}\n' "$(classify_json_encode "$id")" "$esc"
@@ -106,6 +141,7 @@ classify_emit_summary() {
   status=$(classify_status "$raw" "$code")
   local result
   result=$(classify_extract_result "$raw")
+  result=$(classify_redact "$result")
   local code_json="$code"
   case "$code_json" in
     ''|*[!0-9]*) code_json=1 ;;
@@ -138,6 +174,21 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     summary)
       [ $# -ge 2 ] || { echo "usage: classify.sh summary <raw.log> [exit_code] [run_id]" >&2; exit 2; }
       classify_emit_summary "$2" "${3:-0}" "${4:-}"
+      ;;
+    redact)
+      [ $# -ge 2 ] || { echo "usage: ... | classify.sh redact <values-file>" >&2; exit 2; }
+      classify_redact_init "$2"
+      classify_redact "$(cat)"
+      ;;
+    redacted-events)
+      [ $# -ge 3 ] || { echo "usage: classify.sh redacted-events <values-file> <raw.log>" >&2; exit 2; }
+      classify_redact_init "$2"
+      classify_emit_events "$3"
+      ;;
+    redacted-summary)
+      [ $# -ge 3 ] || { echo "usage: classify.sh redacted-summary <values-file> <raw.log> [exit_code]" >&2; exit 2; }
+      classify_redact_init "$2"
+      classify_emit_summary "$3" "${4:-0}"
       ;;
     *)
       echo "usage: classify.sh {status|events|result|summary} ..." >&2

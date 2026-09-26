@@ -25,6 +25,13 @@
 #                 local runs: the live tailer stays off.
 #   INGEST_TOKEN  optional (Phase 2). Per-run HMAC token for INGEST_URL,
 #                 delivered the same way. Never logged.
+#   SECRETS_URL   optional (Phase 3). Signed GET for the run's ephemeral
+#                 secrets JSON ({"ENV_VAR":"value"}). 404 = no secrets.
+#                 Values are merged into the project .env (mode 0600, tmpfs)
+#                 and recorded in a values file so every emitted log line is
+#                 scrubbed of them before it reaches stdout/GCS/ingest.
+#   SECRETS_JSON  optional. Local-dev equivalent of SECRETS_URL (env-delivered
+#                 JSON, same merge + redaction).
 #
 # OUTPUT CONTRACT
 #   stdout: pure NDJSON event stream, one object per line.
@@ -169,28 +176,61 @@ else
 fi
 
 # --- env file: seed from .env.example if the archive carries none, then merge
-# SECRETS_JSON (Phase 3 stub). Values are never logged.
+# the run's ephemeral secrets (SECRETS_URL download or local SECRETS_JSON)
+# into the project .env. Values are never logged: they are merged into .env
+# (mode 0600, tmpfs) and recorded one-per-line in $workdir/secrets.values so
+# the classifiers can scrub them from every emitted event line.
 if [ ! -f "$proj/.env" ] && [ -f "$proj/.env.example" ]; then
   cp "$proj/.env.example" "$proj/.env"
   log ".env seeded from .env.example"
 fi
-if [ -n "${SECRETS_JSON:-}" ]; then
-  log "merging SECRETS_JSON into .env (values redacted)"
-  SECRETS_JSON="$SECRETS_JSON" ENV_FILE="$proj/.env" bun -e '
+secrets_json=""
+if [ -n "${SECRETS_URL:-}" ]; then
+  log "fetching run secrets over HTTPS"
+  SECRETS_URL="$SECRETS_URL" DEST="$workdir/secrets.json" bun -e '
+    const url = process.env.SECRETS_URL
+    const res = await fetch(url, { signal: AbortSignal.timeout(30000) })
+    if (res.status === 404) process.exit(7) // no secrets for this run - fine
+    if (!res.ok) { console.error(`secrets fetch failed: HTTP ${res.status}`); process.exit(1) }
+    const buf = await res.arrayBuffer()
+    await Bun.write(process.env.DEST, buf)
+  '
+  fetch_code=$?
+  if [ "$fetch_code" -eq 7 ]; then
+    log "no run secrets (404) - continuing without"
+  elif [ "$fetch_code" -ne 0 ]; then
+    die "secrets download failed (see stderr above)"
+  else
+    secrets_json="$(cat "$workdir/secrets.json")"
+    log "run secrets downloaded (values redacted)"
+  fi
+elif [ -n "${SECRETS_JSON:-}" ]; then
+  secrets_json="$SECRETS_JSON"
+  log "using SECRETS_JSON from env (values redacted)"
+fi
+if [ -n "$secrets_json" ]; then
+  SECRETS_JSON="$secrets_json" ENV_FILE="$proj/.env" VALUES_FILE="$workdir/secrets.values" bun -e '
     const fs = await import("node:fs")
     let parsed
     try { parsed = JSON.parse(process.env.SECRETS_JSON) }
-    catch { console.error("SECRETS_JSON is not valid JSON"); process.exit(1) }
+    catch { console.error("secrets payload is not valid JSON"); process.exit(1) }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      console.error("SECRETS_JSON must be a JSON object"); process.exit(1)
+      console.error("secrets payload must be a JSON object"); process.exit(1)
     }
     const lines = []
+    const values = []
     for (const [k, v] of Object.entries(parsed)) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) { console.error(`invalid env key: ${k}`); process.exit(1) }
-      lines.push(`${k}=${String(v).replace(/\n/g, "\\n")}`)
+      const val = String(v).replace(/\n/g, "\\n")
+      lines.push(`${k}=${val}`)
+      if (val.length >= 4) values.push(val)
     }
-    fs.appendFileSync(process.env.ENV_FILE, "\n# SECRETS_JSON (injected by sim-entry)\n" + lines.join("\n") + "\n")
-  ' || die "SECRETS_JSON merge failed"
+    fs.appendFileSync(process.env.ENV_FILE, "\n# run-scoped secrets (injected by sim-entry)\n" + lines.join("\n") + "\n")
+    fs.chmodSync(process.env.ENV_FILE, 0o600)
+    fs.writeFileSync(process.env.VALUES_FILE, values.join("\n") + (values.length ? "\n" : ""))
+  ' || die "secrets merge failed"
+  chmod 600 "$workdir/secrets.values" 2>/dev/null || true
+  export SECRET_VALUES_FILE="$workdir/secrets.values"
 fi
 
 # --- install workflow dependencies. The image warms the bun cache with the
@@ -234,8 +274,10 @@ fi
 
 # --- stream events: raw CLI lines first, then the terminal result event.
 # The stream is also mirrored into $events for the optional RESULT_URL upload.
+# Redaction is active whenever a secrets values file exists (Phase 3).
 events="$workdir/events.ndjson"
 : > "$events"
+[ -n "${SECRET_VALUES_FILE:-}" ] && classify_redact_init "$SECRET_VALUES_FILE"
 classify_emit_events "$rawlog" "$RUN_ID" | tee -a "$events"
 classify_emit_summary "$rawlog" "$cli_code" "$RUN_ID" | tee -a "$events"
 status="$(classify_status "$rawlog" "$cli_code")"

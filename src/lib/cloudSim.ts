@@ -88,6 +88,8 @@ async function readSse(
 export async function runCloudSimulation(opts: {
   tarball: Uint8Array;
   flowId?: string | null;
+  /** Phase 3: run-scoped ephemeral secrets (env var name -> value). */
+  secrets?: Record<string, string>;
   onState: (state: CloudRunState) => void;
   signal?: AbortSignal;
 }): Promise<CloudRunState> {
@@ -98,8 +100,9 @@ export async function runCloudSimulation(opts: {
     opts.onState(state);
   };
 
-  // 1. Reserve the run + signed upload URL.
-  const enq = await api.simulate.enqueue({ triggerIdx: 0, flowId: opts.flowId ?? null });
+  // 1. Reserve the run + signed upload URL (secrets ride the enqueue body;
+  // the server persists them to a run-scoped GCS object, never the DB).
+  const enq = await api.simulate.enqueue({ triggerIdx: 0, flowId: opts.flowId ?? null, secrets: opts.secrets });
   push({ phase: "uploading", runId: enq.runId });
 
   // 2. Upload the packed CRE project.

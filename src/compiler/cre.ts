@@ -139,6 +139,11 @@ function secretIdFor(n: BlueprintNode): string | undefined {
   return WEB2_SECRET[n.module];
 }
 
+/** Unique env-var secret names a blueprint reads at run time (cloud-run pre-flight UI). */
+export function blueprintSecrets(bp: Blueprint): string[] {
+  return [...new Set(bp.nodes.map(secretIdFor).filter((s): s is string => !!s))];
+}
+
 /** Visible, non-secret field values for a node (what notify() posts as params). */
 function payloadFor(n: BlueprintNode): Record<string, string> {
   const params = n.params ?? {};

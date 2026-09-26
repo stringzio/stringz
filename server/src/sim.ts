@@ -56,6 +56,7 @@ const getOAuth2 = () => (oauth2 ??= new OAuth2Client());
 
 const projectObject = (runId: string) => `projects/${runId}.tar.gz`;
 const resultObject = (runId: string) => `results/${runId}.ndjson`;
+const secretsObject = (runId: string) => `secrets/${runId}.json`;
 
 /** gs:// URI of the uploaded project archive, recorded on the row at enqueue. */
 export function srcObjectUri(runId: string): string {
@@ -91,6 +92,56 @@ export async function signResultUploadUrl(runId: string): Promise<string> {
     expires: Date.now() + RESULT_UPLOAD_TTL_MS,
   });
   return url;
+}
+
+// ── Phase 3: run-scoped ephemeral secrets ────────────────────────────────────
+//
+// The client sends secrets in the enqueue body; the API writes them to a
+// run-scoped GCS object (never the DB, never logs), dispatch hands the runner
+// a short-lived signed GET, and reconcile deletes the object once the run is
+// terminal. Lifecycle rules also purge the prefix as a backstop.
+
+const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_SECRETS = 32;
+const MAX_SECRET_VALUE_CHARS = 4096;
+
+/** Validate + persist a run's secrets object. Throws with a clear message on bad input. */
+export async function writeRunSecrets(runId: string, secrets: Record<string, string>): Promise<boolean> {
+  assertCloudSimEnabled();
+  const entries = Object.entries(secrets).filter(([, v]) => v.length > 0);
+  if (!entries.length) return false;
+  if (entries.length > MAX_SECRETS) throw new Error(`Too many secrets (max ${MAX_SECRETS})`);
+  for (const [k, v] of entries) {
+    if (!SECRET_NAME_RE.test(k)) throw new Error(`Invalid secret name "${k}" (letters, digits, underscore; no leading digit)`);
+    if (k.length > 128) throw new Error(`Secret name "${k.slice(0, 24)}..." is too long`);
+    if (v.includes("\n") || v.includes("\r")) throw new Error(`Secret "${k}" must be a single line`);
+    if (v.length > MAX_SECRET_VALUE_CHARS) throw new Error(`Secret "${k}" is too long (max ${MAX_SECRET_VALUE_CHARS} chars)`);
+  }
+  await getStorage().bucket(bucketName).file(secretsObject(runId)).save(JSON.stringify(Object.fromEntries(entries)), {
+    contentType: "application/json",
+  });
+  return true;
+}
+
+/** Signed GET for the runner; 404 is expected when the run carries no secrets. */
+export async function signSecretsUrl(runId: string): Promise<string> {
+  assertCloudSimEnabled();
+  const [url] = await getStorage().bucket(bucketName).file(secretsObject(runId)).getSignedUrl({
+    version: "v4",
+    action: "read",
+    expires: Date.now() + DOWNLOAD_TTL_MS,
+  });
+  return url;
+}
+
+/** Best-effort purge of a run's secrets; runs exactly once per terminal reconcile. */
+export async function deleteRunSecrets(runId: string): Promise<void> {
+  if (!cloudSimEnabled) return;
+  try {
+    await getStorage().bucket(bucketName).file(secretsObject(runId)).delete();
+  } catch {
+    // already gone, or transient GCS error - lifecycle rules are the backstop
+  }
 }
 
 /** Push a dispatch task onto the queue. Returns the created task name. */
@@ -130,7 +181,11 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
   if (row.status !== "queued") return "not-queued";
   const now = new Date().toISOString();
   await db.update(schema.simulationRuns).set({ status: "running", updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
-  const [srcUrl, resultUrl] = await Promise.all([signProjectDownloadUrl(runId), signResultUploadUrl(runId)]);
+  const [srcUrl, resultUrl, secretsUrl] = await Promise.all([
+    signProjectDownloadUrl(runId),
+    signResultUploadUrl(runId),
+    signSecretsUrl(runId),
+  ]);
   try {
     await getJobs().runJob({
       name: `projects/${projectId}/locations/${jobLocation}/jobs/${jobName}`,
@@ -147,6 +202,9 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
               // until then these are inert extra env vars.
               { name: "INGEST_URL", value: `${appUrl()}/sim-ingest?runId=${runId}` },
               { name: "INGEST_TOKEN", value: ingestTokenFor(runId) },
+              // Phase 3: signed GET for the run's ephemeral secrets; a 404
+              // means the run has none.
+              { name: "SECRETS_URL", value: secretsUrl },
             ],
           },
         ],
@@ -220,11 +278,13 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
         updatedAt: now,
       };
       const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
+      void deleteRunSecrets(row.id);
       return { row: updated ?? { ...row, ...patch }, events };
     }
     if (Date.now() - new Date(row.updatedAt).getTime() > STALE_RUNNING_MS) {
       const patch = { status: "failed", errorClass: "stale", updatedAt: now };
       const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
+      void deleteRunSecrets(row.id);
       return { row: updated ?? { ...row, ...patch }, events: [] };
     }
     return { row, events: [] };

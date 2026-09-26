@@ -7,6 +7,8 @@
  * runner/test/contract-test.ts against the captured-output fixtures.
  */
 
+import fs from "node:fs";
+
 /** JSON-encode a string: backslash first, then quote, tab, newline. Same
  *  order and rules as classify_json_encode in classify.sh. */
 export function jsonEncode(s: string): string {
@@ -19,6 +21,31 @@ export function jsonEncode(s: string): string {
 
 /** Same shape as classify.sh's `\[USER LOG\][[:space:]]+([^:]+):` match. */
 const NODE_RE = /\[USER LOG\]\s+([^:]+):/;
+
+/**
+ * Phase 3 redaction, mirroring classify.sh's classify_redact exactly: fixed-
+ * string replacement of each value with *** (values under 4 chars skipped,
+ * same rule on both sides). Raw-line scrub happens BEFORE JSON encoding;
+ * parity is pinned by runner/test/contract-test.ts.
+ */
+export function scrubSecrets(line: string, values: string[]): string {
+  let out = line;
+  for (const v of values) {
+    if (v.length < 4) continue;
+    let i = out.indexOf(v);
+    while (i >= 0) {
+      out = out.slice(0, i) + "***" + out.slice(i + v.length);
+      i = out.indexOf(v);
+    }
+  }
+  return out;
+}
+
+/** Load the entry.sh secrets-values file (one value per line, >=4 chars kept). */
+export function loadSecretValues(file: string | undefined): string[] {
+  if (!file || !fs.existsSync(file)) return [];
+  return fs.readFileSync(file, "utf8").split("\n").filter((v) => v.length >= 4);
+}
 
 /**
  * Classify one raw CLI output line into zero or more NDJSON event strings.
