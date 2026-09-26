@@ -105,13 +105,24 @@ LABEL org.opencontainers.image.title="stringz-sim-runner" \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# Minimal egress lockdown (issue #11 Phase 1). The GCP metadata hostnames are
+# pinned to 0.0.0.0 at CONTAINER START by egress-init.sh - BuildKit mounts
+# /etc/hosts read-only during builds, and Docker/Cloud Run shadow a baked
+# /etc/hosts with a runtime file, so a build-time RUN cannot do it. Cloud Run
+# tasks also have no NET_ADMIN (gVisor), so raw-IP link-local egress stays
+# open at this layer; it is a Phase 4 VPC-level control - see RUNNER.md
+# "Egress posture".
+RUN command -v setpriv >/dev/null || { echo "setpriv (util-linux) is required" >&2; exit 1; }
 COPY --from=cli-builder /out/cre /usr/local/bin/cre
 COPY --from=javy-builder --chown=bun:bun /out/cache/ /home/bun/.cache/
 COPY --from=warm --chown=bun:bun /home/bun/.bun /home/bun/.bun
 COPY entry.sh /usr/local/bin/sim-entry
+COPY egress-init.sh /usr/local/bin/egress-init
 COPY lib/classify.sh /usr/local/lib/sim/classify.sh
-RUN chmod 0755 /usr/local/bin/sim-entry /usr/local/lib/sim/classify.sh /usr/local/bin/cre
-USER bun
+RUN chmod 0755 /usr/local/bin/sim-entry /usr/local/bin/egress-init /usr/local/lib/sim/classify.sh /usr/local/bin/cre
+# Root only so egress-init can edit /etc/hosts; the workload itself drops to
+# the bun user inside egress-init before execing sim-entry.
+USER root
 ENV HOME=/home/bun
 WORKDIR /work
-ENTRYPOINT ["/usr/local/bin/sim-entry"]
+ENTRYPOINT ["/usr/local/bin/egress-init"]
