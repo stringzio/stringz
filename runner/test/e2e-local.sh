@@ -14,6 +14,9 @@
 #   4. mounts a real ~/.cre if present (full path), else a MOCK /secrets/cre
 #      (auth_error path); reports which was exercised
 #   5. validates the NDJSON stdout contract and the entry exit code
+#   6. validates the Phase 2 live stream: the runner streams events to a local
+#      capture server (INGEST_URL), and the captured batches must equal the
+#      completed stdout stream event-for-event
 #
 # Exit: 0 when the exercised path matches expectation, 1 otherwise.
 set -uo pipefail
@@ -70,6 +73,30 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   "$REPO_ROOT/runner/build.sh" "$IMAGE" "linux/$(uname -m | sed 's/x86_64/amd64/')" || exit 1
 fi
 
+# --- 4b. local ingest capture server (Phase 2 live-stream verification).
+# The runner POSTs event batches here instead of the cloud API; afterwards we
+# assert the captured live stream is identical to the completed stdout stream.
+INGEST_OUT="$WORK/ingest.jsonl"
+cat > "$WORK/ingest-server.ts" <<'EOF'
+import { appendFileSync } from "node:fs";
+const out = process.argv[2];
+Bun.serve({
+  port: 8931,
+  async fetch(req) {
+    if (req.method !== "POST") return new Response(null, { status: 404 });
+    const body = await req.text();
+    appendFileSync(out, body + "\n");
+    let n = 0;
+    try { n = JSON.parse(body).length; } catch { /* count unknown */ }
+    return Response.json({ ok: true, received: n });
+  },
+});
+EOF
+bun "$WORK/ingest-server.ts" "$INGEST_OUT" > "$WORK/ingest-server.log" 2>&1 &
+ingest_pid=$!
+trap 'kill "$ingest_pid" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+sleep 1
+
 # --- 5. run
 ndjson="$WORK/stdout.ndjson"
 stderr_log="$WORK/stderr.log"
@@ -82,6 +109,8 @@ docker run --rm \
   -e TRIGGER_IDX=0 \
   -e TARGET=staging-settings \
   -e SIM_TIMEOUT=150 \
+  -e INGEST_URL="http://host.docker.internal:8931/sim-ingest?runId=e2e-local" \
+  -e INGEST_TOKEN="e2e-local-token" \
   "$IMAGE" > "$ndjson" 2> "$stderr_log"
 entry_code=$?
 set -e
@@ -117,6 +146,26 @@ bad_lines="$(NDJSON="$ndjson" bun -e '
 [ "$bad_lines" = "0" ] || { echo "[e2e] FAIL: $bad_lines invalid NDJSON line(s)" >&2; fail=1; }
 
 grep -q '"t":"node","id":"fmt"' "$ndjson" || { echo "[e2e] FAIL: no node event for fmt in stream" >&2; fail=1; }
+
+# --- live-stream verification: the captured ingest batches, flattened, must
+# equal the completed stdout stream exactly (same events, same order).
+if [ -s "$INGEST_OUT" ]; then
+  INGEST="$INGEST_OUT" NDJSON="$ndjson" bun -e '
+    const batches = (await Bun.file(process.env.INGEST).text()).split("\n").filter((l) => l.length > 0).flatMap((l) => JSON.parse(l));
+    const stdout = (await Bun.file(process.env.NDJSON).text()).split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l));
+    if (JSON.stringify(batches) !== JSON.stringify(stdout)) {
+      const i = batches.findIndex((e, j) => JSON.stringify(e) !== JSON.stringify(stdout[j]));
+      console.error(`[e2e] FAIL: live stream diverges at event ${i} (captured ${batches.length}, stdout ${stdout.length})`);
+      console.error(`  captured: ${JSON.stringify(batches[i]).slice(0, 120)}`);
+      console.error(`  stdout:   ${JSON.stringify(stdout[i]).slice(0, 120)}`);
+      process.exit(1);
+    }
+    console.log(`[e2e] live stream OK: ${batches.length} events ingested, identical to stdout`);
+  ' || fail=1
+else
+  echo "[e2e] FAIL: ingest capture is empty - live stream never arrived" >&2
+  fail=1
+fi
 
 if [ "$fail" -eq 0 ]; then
   echo "[e2e] PASS (mode=$MODE, status=$status)"
