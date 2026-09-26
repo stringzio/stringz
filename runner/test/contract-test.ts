@@ -246,15 +246,18 @@ runEntryResultUrlTest();
 // --- Secret Manager archive mode: CRE_SECRETS points at a session tgz file --
 
 function runEntrySecretsArchiveTest() {
-  // Build the same artifact the rotation runbook uploads: a tar.gz whose
-  // top-level entry is .cre/ (Secret Manager volumes mount the payload as
-  // one file, not a directory).
+  // Build the artifact the rotation runbook uploads: the session tar.gz,
+  // BASE64-ENCODED (binary payloads do not survive every transport layer;
+  // base64 is pure ASCII). Secret Manager volumes mount the payload as one
+  // file, not a directory.
   const src = fs.mkdtempSync(path.join("/tmp", "sim-crets-src-"));
   fs.mkdirSync(path.join(src, ".cre"));
   fs.writeFileSync(path.join(src, ".cre", "cre.yaml"), "tokens: mock\n");
   fs.writeFileSync(path.join(src, ".cre", "context.yaml"), "tenant: mock\n");
-  const sessionTgz = path.join(src, "session.tgz");
-  spawnSync("tar", ["-czf", sessionTgz, "-C", src, ".cre"], { stdio: "inherit" });
+  const tgzTmp = path.join(src, "session.tgz");
+  spawnSync("tar", ["-czf", tgzTmp, "-C", src, ".cre"], { stdio: "inherit" });
+  const sessionB64 = path.join(src, "session.b64");
+  spawnSync("sh", ["-c", `base64 < "${tgzTmp}" > "${sessionB64}"`], { stdio: "inherit" });
 
   const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
   const stubDir = path.join(tmp, "bin");
@@ -268,7 +271,7 @@ function runEntrySecretsArchiveTest() {
     PATH: `${stubDir}:${process.env.PATH}`,
     SRC_URL: `file://${tgz}`,
     RESULT_URL: `file://${eventsPath}`,
-    CRE_SECRETS: sessionTgz,
+    CRE_SECRETS: sessionB64,
     SIM_TIMEOUT: "30",
     HOME: tmp,
   } as NodeJS.ProcessEnv;
