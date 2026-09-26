@@ -1,4 +1,4 @@
-import { pgTable, text, bigint, integer, boolean, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, bigint, bigserial, integer, boolean, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
 
 /**
  * FlowKit Postgres schema (Drizzle). Primary and only database: the managed
@@ -123,3 +123,17 @@ export const simulationRuns = pgTable("simulation_runs", {
   createdAt: text("created_at").notNull(), // ISO
   updatedAt: text("updated_at").notNull(), // ISO
 }, (t) => [index("simulation_runs_user_idx").on(t.userId)]);
+
+/**
+ * Live event stream of a run (Phase 2). The runner POSTs these during
+ * execution (see /sim-ingest); the GCS result object stays the canonical
+ * completed log. Postgres (not process memory) backs the buffer so SSE works
+ * when the API scales past one instance; pg LISTEN/NOTIFY on channel
+ * 'sim_events' (payload: runId) fans new rows out to subscribers.
+ */
+export const simulationEvents = pgTable("simulation_events", {
+  seq: bigserial("seq", { mode: "bigint" }).primaryKey(),
+  runId: text("run_id").notNull().references(() => simulationRuns.id, { onDelete: "cascade" }),
+  event: text("event").notNull(), // one runner NDJSON event object, stringified
+  createdAt: text("created_at").notNull(), // ISO
+}, (t) => [index("simulation_events_run_idx").on(t.runId, t.seq)]);
