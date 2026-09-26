@@ -21,6 +21,7 @@ Nothing here touches `.github/workflows`, `server/`, `src/`, or any GCP resource
 | `TRIGGER_IDX` | no       | `0`               | `--trigger-index` for the CLI.                                 |
 | `TARGET`      | no       | `staging-settings`| `--target` for the CLI.                                        |
 | `SIM_TIMEOUT` | no       | `150`             | Seconds before the CLI is killed (SIGKILL 10s after SIGTERM).  |
+| `CRE_SECRETS` | no       | `/secrets/cre`    | Auth session mount: directory (local docker) or single file (Secret Manager archive, auto-extracted). |
 | `SECRETS_JSON`| no       |                   | Phase 3 stub. JSON object merged into the project `.env`. Values are never logged. |
 
 ### Output contract
@@ -78,6 +79,11 @@ The CLI needs a deployed-workflow approval for API-key mode that we do not have,
 The session lives in `~/.cre` on the owner's machine and contains `cre.yaml` (OAuth tokens) and `context.yaml` (tenant manifest).
 At runtime it is mounted read-only at `/secrets/cre`, and the entry script copies it to `$HOME/.cre` before running the CLI.
 The copy is required, not cosmetic: the CLI writes refreshed tokens back into `$HOME/.cre`, and a read-only mount makes that write fail, which surfaces as an auth failure with exit code 0 (verified).
+
+Two mount forms are supported (`CRE_SECRETS` overrides the path, default `/secrets/cre`):
+
+- **Directory** - local docker runs (`-v ~/.cre:/secrets/cre:ro`); copied as-is.
+- **Single file** - Secret Manager volume mounts deliver the payload as ONE file, so the secret holds the tar.gz archive from the rotation runbook; the entry script extracts it into `$HOME` and verifies `.cre/cre.yaml` came out.
 
 ### Rotation runbook
 

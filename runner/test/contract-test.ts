@@ -243,5 +243,44 @@ function runEntryResultUrlTest() {
 }
 runEntryResultUrlTest();
 
+// --- Secret Manager archive mode: CRE_SECRETS points at a session tgz file --
+
+function runEntrySecretsArchiveTest() {
+  // Build the same artifact the rotation runbook uploads: a tar.gz whose
+  // top-level entry is .cre/ (Secret Manager volumes mount the payload as
+  // one file, not a directory).
+  const src = fs.mkdtempSync(path.join("/tmp", "sim-crets-src-"));
+  fs.mkdirSync(path.join(src, ".cre"));
+  fs.writeFileSync(path.join(src, ".cre", "cre.yaml"), "tokens: mock\n");
+  fs.writeFileSync(path.join(src, ".cre", "context.yaml"), "tenant: mock\n");
+  const sessionTgz = path.join(src, "session.tgz");
+  spawnSync("tar", ["-czf", sessionTgz, "-C", src, ".cre"], { stdio: "inherit" });
+
+  const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
+  const stubDir = path.join(tmp, "bin");
+  fs.mkdirSync(stubDir);
+  writeStubBin(stubDir, path.join(fixtures, "success.log"), "0");
+  const tgz = makeProjectTgz(tmp);
+  const eventsPath = path.join(tmp, "events.ndjson");
+  const entry = path.join(root, "entry.sh");
+  const env = {
+    ...process.env,
+    PATH: `${stubDir}:${process.env.PATH}`,
+    SRC_URL: `file://${tgz}`,
+    RESULT_URL: `file://${eventsPath}`,
+    CRE_SECRETS: sessionTgz,
+    SIM_TIMEOUT: "30",
+    HOME: tmp,
+  } as NodeJS.ProcessEnv;
+  const r = spawnSync("bash", [entry], { encoding: "utf8", env });
+  const extracted = fs.existsSync(path.join(tmp, ".cre", "cre.yaml"));
+  check("entry.sh CRE_SECRETS archive: exit 0, session extracted to $HOME/.cre",
+    r.status === 0 && extracted,
+    { entryExit: r.status, extracted, stderrTail: r.stderr.split("\n").slice(-3) });
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(src, { recursive: true, force: true });
+}
+runEntrySecretsArchiveTest();
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);
