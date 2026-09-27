@@ -25,6 +25,7 @@ import {
 } from "../../../src/lib/contract";
 import {
   assertCloudSimEnabled,
+  assertRateLimits,
   srcObjectUri,
   signUploadUrl,
   enqueueTask,
@@ -302,13 +303,9 @@ export const appRouter = router({
     /** Reserve a run row + signed upload URL, then push a dispatch task. The client PUTs the project tarball before the task fires. */
     enqueue: protectedProcedure.input(simulateEnqueueInput).mutation(async ({ input, ctx }) => {
       assertCloudSimEnabled();
-      const [inflight] = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(schema.simulationRuns)
-        .where(sql`${schema.simulationRuns.userId} = ${ctx.user.id} and ${schema.simulationRuns.status} in ('queued', 'running')`);
-      if ((inflight?.count ?? 0) >= 3) {
-        throw new Error("Too many simulations in flight (max 3) - wait for one to finish.");
-      }
+      // Phase 4 Slice 4A: per-user daily + concurrent caps, enforced in
+      // Postgres before any GCS write or task dispatch (see sim.ts).
+      await assertRateLimits(ctx.user.id);
       const runId = randomUUID();
       const now = new Date().toISOString();
       await db.insert(schema.simulationRuns).values({

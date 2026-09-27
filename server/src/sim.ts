@@ -2,7 +2,7 @@ import { Storage } from "@google-cloud/storage";
 import { CloudTasksClient } from "@google-cloud/tasks";
 import { JobsClient } from "@google-cloud/run";
 import { OAuth2Client } from "google-auth-library";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { db, pool, schema } from "./db/client";
 
@@ -33,6 +33,47 @@ const DOWNLOAD_TTL_MS = 15 * 60 * 1000;
 const RESULT_UPLOAD_TTL_MS = 60 * 60 * 1000;
 const STALE_RUNNING_MS = 15 * 60 * 1000;
 const MAX_EVENTS = 500;
+
+// ── Phase 4 Slice 4A: per-user rate caps (issue #11) ─────────────────────────
+//
+// Trial billing has no budget-alert API, so cost ceilings are enforced here,
+// in-app, before any GCS write or task dispatch. Env-tunable; defaults match
+// the Phase 4 plan (50 runs per rolling 24h, 3 concurrent).
+const intFromEnv = (v: string | undefined, dflt: number): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
+};
+
+/** Max runs a user may start per rolling 24h window. */
+export const RATE_LIMIT_MAX_RUNS_24H = intFromEnv(process.env.SIM_RATE_MAX_RUNS_24H, 50);
+/** Max runs a user may have queued + running at once. */
+export const RATE_LIMIT_MAX_INFLIGHT = intFromEnv(process.env.SIM_RATE_MAX_INFLIGHT, 3);
+/** Rolling window for the runs cap. */
+export const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Enforce the per-user caps at enqueue time. Throws with a clear error when
+ *  over budget. A per-user advisory xact lock serializes concurrent enqueues
+ *  so two simultaneous requests cannot both pass the counts (READ COMMITTED
+ *  alone would let both snapshot the same count). The lock is transactional,
+ *  so it releases with the insert commit or rollback. */
+export async function assertRateLimits(userId: string): Promise<void> {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
+  const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+  const [recent] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(schema.simulationRuns)
+    .where(sql`${schema.simulationRuns.userId} = ${userId} and ${schema.simulationRuns.createdAt} >= ${windowStart}`);
+  if ((recent?.count ?? 0) >= RATE_LIMIT_MAX_RUNS_24H) {
+    throw new Error(`Daily simulation limit reached (max ${RATE_LIMIT_MAX_RUNS_24H} runs per 24h) - try again later.`);
+  }
+  const [inflight] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(schema.simulationRuns)
+    .where(sql`${schema.simulationRuns.userId} = ${userId} and ${schema.simulationRuns.status} in ('queued', 'running')`);
+  if ((inflight?.count ?? 0) >= RATE_LIMIT_MAX_INFLIGHT) {
+    throw new Error(`Too many simulations in flight (max ${RATE_LIMIT_MAX_INFLIGHT}) - wait for one to finish.`);
+  }
+}
 
 export type SimulationRunRow = typeof schema.simulationRuns.$inferSelect;
 export type SimulationEvent = Record<string, unknown>;
