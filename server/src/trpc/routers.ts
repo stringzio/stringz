@@ -79,6 +79,8 @@ const runShape = (r: typeof schema.simulationRuns.$inferSelect) => ({
   result: r.result,
   errorClass: r.errorClass,
   srcGcsUri: r.srcGcsUri,
+  durationMs: r.durationMs,
+  costEstUsd: r.costEstUsd,
   createdAt: r.createdAt,
   updatedAt: r.updatedAt,
 });

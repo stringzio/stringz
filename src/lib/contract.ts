@@ -184,6 +184,8 @@ export const simulateRunSchema = z.object({
   result: z.string().nullable(),
   errorClass: z.string().nullable(),
   srcGcsUri: z.string().nullable(),
+  durationMs: z.number().nullable(),
+  costEstUsd: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   events: z.array(z.record(z.string(), z.unknown())),
