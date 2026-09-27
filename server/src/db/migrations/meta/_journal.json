@@ -50,6 +50,13 @@
       "when": 1790504175060,
       "tag": "0006_glamorous_george_stacy",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790522950292,
+      "tag": "0007_ordinary_moon_knight",
+      "breakpoints": true
     }
   ]
 }

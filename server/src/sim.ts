@@ -60,6 +60,24 @@ export const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Max compiled-project size in bytes (env: SIM_MAX_PROJECT_BYTES). */
 export const MAX_PROJECT_BYTES = intFromEnv(process.env.SIM_MAX_PROJECT_BYTES, 10 * 1024 * 1024);
 
+// ── Phase 5 Slice 5A: per-run metering ───────────────────────────────────────
+/** Estimated Cloud Run task cost per executed second: 1 vCPU + 512 MiB at the
+ *  us-central1 active rate ($0.000024/vCPU-s + $0.0000025/GiB-s). This feeds
+ *  dashboards and quota economics - an estimate, not a billing figure. */
+export const RUN_COST_PER_SECOND_USD = 0.0000253;
+
+/** Duration (ms) -> cost estimate as a fixed 8-decimal string for numeric(14,8). */
+export function costEstimateFor(durationMs: number): string {
+  const usd = (durationMs / 1000) * RUN_COST_PER_SECOND_USD;
+  return (Math.round(usd * 1e8) / 1e8).toFixed(8);
+}
+
+/** Wall-time from a run's startedAt (dispatch) to now, with a pre-5A fallback. */
+function meteredDurationMs(row: { startedAt: string | null; updatedAt: string }): number {
+  const from = row.startedAt ?? row.updatedAt;
+  return Math.max(0, Date.now() - new Date(from).getTime());
+}
+
 // ── Phase 4 Slice 4D: log-redaction backstop ─────────────────────────────────
 //
 // The runner already scrubs full secret values from every emitted line
@@ -311,7 +329,12 @@ export async function cancelRun(runId: string, userId: string): Promise<CancelOu
   const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
   if (!row || row.userId !== userId) return "not-found";
   if (row.status !== "queued" && row.status !== "running") return "not-cancellable";
-  await db.update(schema.simulationRuns).set({ status: "cancelled", updatedAt: new Date().toISOString() }).where(eq(schema.simulationRuns.id, runId));
+  const durationMs = row.status === "running" ? meteredDurationMs(row) : 0;
+  await db.update(schema.simulationRuns).set({
+    status: "cancelled",
+    ...(durationMs > 0 ? { durationMs, costEstUsd: costEstimateFor(durationMs) } : {}),
+    updatedAt: new Date().toISOString(),
+  }).where(eq(schema.simulationRuns.id, runId));
   void deleteRunSecrets(runId);
   const execName = row.executionName ?? (await recordExecutionForRun(runId));
   await cancelExecutionByName(execName);
@@ -386,7 +409,7 @@ export async function dispatchRun(runId: string, triggerInput?: { httpPayload?: 
     }
   }
   const now = new Date().toISOString();
-  await db.update(schema.simulationRuns).set({ status: "running", updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
+  await db.update(schema.simulationRuns).set({ status: "running", startedAt: now, updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
   const [srcUrl, resultUrl, secretsUrl, secretsDeleteUrl] = await Promise.all([
     signProjectDownloadUrl(runId),
     signResultUploadUrl(runId),
@@ -489,11 +512,14 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
       // Keep auth_error/timeout as first-class row statuses: the rotation
       // alert keys off auth_error, and the UI explains each differently.
       const known = runnerStatus === "succeeded" || runnerStatus === "auth_error" || runnerStatus === "timeout";
+      const durationMs = meteredDurationMs(row);
       const patch = {
         status: known ? runnerStatus : "failed",
         errorClass: runnerStatus === "succeeded" ? null : runnerStatus,
         exitCode: typeof resultEvent.exitCode === "number" ? resultEvent.exitCode : null,
         result: typeof resultEvent.result === "string" ? resultEvent.result : null,
+        durationMs,
+        costEstUsd: costEstimateFor(durationMs),
         updatedAt: now,
       };
       const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
@@ -504,7 +530,8 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
       // Phase 4 Slice 4B: kill the Cloud Run execution too, not just the row.
       await cancelExecutionByName(row.executionName ?? "");
       secretValueCache.delete(row.id);
-      const patch = { status: "failed", errorClass: "stale", updatedAt: now };
+      const durationMs = meteredDurationMs(row);
+      const patch = { status: "failed", errorClass: "stale", durationMs, costEstUsd: costEstimateFor(durationMs), updatedAt: now };
       const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
       void deleteRunSecrets(row.id);
       return { row: updated ?? { ...row, ...patch }, events: [] };

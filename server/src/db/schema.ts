@@ -1,4 +1,4 @@
-import { pgTable, text, bigint, bigserial, integer, boolean, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, bigint, bigserial, integer, boolean, numeric, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
 
 /**
  * FlowKit Postgres schema (Drizzle). Primary and only database: the managed
@@ -121,6 +121,9 @@ export const simulationRuns = pgTable("simulation_runs", {
   errorClass: text("error_class"), // runner status when failed: failed | auth_error | timeout | stale
   srcGcsUri: text("src_gcs_uri"), // gs:// URI of the uploaded project archive
   executionName: text("execution_name"), // Phase 4B: Cloud Run execution path (enables cancel/kill)
+  startedAt: text("started_at"), // Phase 5A: ISO when dispatch moved the row to running
+  durationMs: integer("duration_ms"), // Phase 5A: terminal transition sets wall time
+  costEstUsd: numeric("cost_est_usd", { precision: 14, scale: 8 }), // Phase 5A: duration x run-rate estimate
   createdAt: text("created_at").notNull(), // ISO
   updatedAt: text("updated_at").notNull(), // ISO
 }, (t) => [index("simulation_runs_user_idx").on(t.userId)]);
