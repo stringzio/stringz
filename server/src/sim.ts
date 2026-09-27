@@ -5,6 +5,7 @@ import { OAuth2Client } from "google-auth-library";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { db, pool, schema } from "./db/client";
+import { scrubSecretValues } from "./scrub";
 
 /**
  * Cloud simulation orchestration. A run's life:
@@ -58,6 +59,44 @@ export const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // post-download for file:// sources and local runs.
 /** Max compiled-project size in bytes (env: SIM_MAX_PROJECT_BYTES). */
 export const MAX_PROJECT_BYTES = intFromEnv(process.env.SIM_MAX_PROJECT_BYTES, 10 * 1024 * 1024);
+
+// ── Phase 4 Slice 4D: log-redaction backstop ─────────────────────────────────
+//
+// The runner already scrubs full secret values from every emitted line
+// (classify.sh classify_redact + stream.ts scrubSecrets). This backstop re-
+// scrubs each event at the API boundary before it reaches the stream table,
+// so a value that slips past a runner emitter still cannot persist. Values
+// come from the run's secrets object, fetched once per run and cached in
+// memory for the run's lifetime; the entry drops at terminal reconcile.
+// Semantic matches the runner on purpose: full-value masking only, <4-char
+// values skipped, partial echoes are accepted residual.
+
+const secretValueCache = new Map<string, string[]>();
+const SECRET_CACHE_MAX_RUNS = 1000;
+
+async function secretValuesForRun(runId: string): Promise<string[]> {
+  const cached = secretValueCache.get(runId);
+  if (cached) return cached;
+  const values: string[] = [];
+  try {
+    const file = getStorage().bucket(bucketName).file(secretsObject(runId));
+    const [exists] = await file.exists();
+    if (exists) {
+      const [buf] = await file.download();
+      const parsed = JSON.parse(buf.toString("utf8")) as Record<string, string>;
+      for (const v of Object.values(parsed)) if (typeof v === "string" && v.length >= 4) values.push(v);
+    }
+  } catch {
+    // secrets object gone or unreadable - nothing to scrub with; the runner
+    // scrubbed what it could before its own teardown delete
+  }
+  if (secretValueCache.size >= SECRET_CACHE_MAX_RUNS) {
+    const oldest = secretValueCache.keys().next().value;
+    if (oldest !== undefined) secretValueCache.delete(oldest);
+  }
+  secretValueCache.set(runId, values);
+  return values;
+}
 
 /** Enforce the per-user caps at enqueue time. Throws with a clear error when
  *  over budget. A per-user advisory xact lock serializes concurrent enqueues
@@ -433,6 +472,7 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
     const events = await loadEvents(row.id);
     const resultEvent = [...events].reverse().find((e) => e.t === "result");
     if (resultEvent) {
+      secretValueCache.delete(row.id);
       const runnerStatus = typeof resultEvent.status === "string" ? resultEvent.status : "failed";
       // Keep auth_error/timeout as first-class row statuses: the rotation
       // alert keys off auth_error, and the UI explains each differently.
@@ -451,6 +491,7 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
     if (Date.now() - new Date(row.updatedAt).getTime() > STALE_RUNNING_MS) {
       // Phase 4 Slice 4B: kill the Cloud Run execution too, not just the row.
       await cancelExecutionByName(row.executionName ?? "");
+      secretValueCache.delete(row.id);
       const patch = { status: "failed", errorClass: "stale", updatedAt: now };
       const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
       void deleteRunSecrets(row.id);
@@ -510,9 +551,13 @@ export async function ingestEvents(
   if (!verifyIngestToken(runId, token)) return { outcome: "bad-token" };
   const [row] = await db.select({ id: schema.simulationRuns.id }).from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
   if (!row) return { outcome: "not-found" };
+  // Phase 4 Slice 4D: re-scrub against the run's secret values before the
+  // events touch the stream table. No-op when the run carries no secrets.
+  const values = await secretValuesForRun(runId);
   const clean = events
     .filter(isEventLike)
     .map((e) => JSON.stringify(e))
+    .map((s) => (values.length ? scrubSecretValues(s, values) : s))
     .filter((s) => s.length <= MAX_EVENT_BYTES)
     .slice(0, MAX_INGEST_BATCH);
   if (!clean.length) return { outcome: "ok", received: 0 };
