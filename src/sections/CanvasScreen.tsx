@@ -1866,6 +1866,18 @@ cd .. && cre workflow simulate ${flowSlug}-workflow --target staging-settings`}<
             showToast(err instanceof BlueprintError ? err.message : "Could not compile this flow for a cloud run");
           }
         }}
+        onCancel={() => {
+          // Phase 4 Slice 4B: stop the local stream immediately and ask the
+          // server to kill the queued/running execution. The controller's
+          // abort path renders the cancelled phase.
+          const runId = cloud?.runId ?? null;
+          cloudAbort.current?.abort();
+          if (!runId) return;
+          void api.simulate
+            .cancel({ runId })
+            .then((r) => showToast(r.status === "ok" ? "Cloud run cancelled" : `Could not cancel: ${r.status}`))
+            .catch((err: unknown) => showToast(err instanceof Error ? err.message : "Could not cancel the run"));
+        }}
       />
       <Toast toast={toast} />
       <ProSheet open={!!proFeature} onClose={() => setProFeature(null)} feature={proFeature ?? undefined} />

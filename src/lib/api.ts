@@ -11,6 +11,8 @@ import type {
   SavedFlow,
   SimulateEnqueueInput,
   SimulateEnqueueResponse,
+  SimulateCancelInput,
+  SimulateCancelResponse,
   SimulateListResponse,
   SimulateRun,
   SiweVerifyInput,
@@ -77,6 +79,7 @@ export const api = {
   simulate: {
     enqueue: (input: SimulateEnqueueInput) => call<SimulateEnqueueResponse>("simulate.enqueue", input),
     status: (input: { runId: string }) => call<SimulateRun>("simulate.status", input),
+    cancel: (input: SimulateCancelInput) => call<SimulateCancelResponse>("simulate.cancel", input),
     list: () => call<SimulateListResponse>("simulate.list"),
   },
 };

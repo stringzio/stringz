@@ -1,6 +1,6 @@
 import { Storage } from "@google-cloud/storage";
 import { CloudTasksClient } from "@google-cloud/tasks";
-import { JobsClient } from "@google-cloud/run";
+import { ExecutionsClient, JobsClient } from "@google-cloud/run";
 import { OAuth2Client } from "google-auth-library";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -89,10 +89,12 @@ const appUrl = () => process.env.PUBLIC_APP_URL ?? "http://localhost:3000";
 let storage: Storage | null = null;
 let tasks: CloudTasksClient | null = null;
 let jobs: JobsClient | null = null;
+let executions: ExecutionsClient | null = null;
 let oauth2: OAuth2Client | null = null;
 const getStorage = () => (storage ??= new Storage());
 const getTasks = () => (tasks ??= new CloudTasksClient());
 const getJobs = () => (jobs ??= new JobsClient());
+const getExecutions = () => (executions ??= new ExecutionsClient());
 const getOAuth2 = () => (oauth2 ??= new OAuth2Client());
 
 const projectObject = (runId: string) => `projects/${runId}.tar.gz`;
@@ -197,6 +199,78 @@ export async function deleteRunSecrets(runId: string): Promise<void> {
   }
 }
 
+// ── Phase 4 Slice 4B: kill runaway runs ──────────────────────────────────────
+//
+// dispatch hands the run to a Cloud Run job task; runJob's await resolves in
+// seconds (probe-verified), so the execution object is resolved afterwards by
+// matching the RUN_ID container-env override on the job's executions. The env
+// match is race-free: unlike "newest execution", two concurrent dispatches
+// cannot confuse each other's execution. The stored execution name powers the
+// user cancel and the stale-sweep kill. Live-probed 2026-09-27: cancel of a
+// hung task landed as Completed=False, reason=Cancelled.
+
+const jobResourcePath = () => `projects/${projectId}/locations/${jobLocation}/jobs/${jobName}`;
+
+function executionHasRunId(execution: unknown, runId: string): boolean {
+  const containers =
+    (execution as { template?: { containers?: { env?: { name?: string; value?: string }[] }[] } })?.template?.containers ?? [];
+  return containers.some((c) => (c.env ?? []).some((e) => e.name === "RUN_ID" && e.value === runId));
+}
+
+/** Best-effort cancel of a Cloud Run execution. All errors ignored - the
+ *  execution may already be finished or gone. */
+async function cancelExecutionByName(name: string | null): Promise<void> {
+  if (!name) return;
+  try {
+    await getExecutions().cancelExecution({ name });
+  } catch {
+    // already terminal or gone - nothing left to kill
+  }
+}
+
+/** Resolve the execution a dispatch created and remember it on the row.
+ *  Polls briefly (the object appears a few seconds after runJob). If the run
+ *  was cancelled while resolving, cancel the execution immediately. */
+async function recordExecutionForRun(runId: string): Promise<string> {
+  try {
+    for (let attempt = 0; attempt < 15; attempt++) {
+      const [list] = await getExecutions().listExecutions({ parent: jobResourcePath(), pageSize: 50 }, { autoPaginate: false });
+      const hit = (list ?? []).find((e) => executionHasRunId(e, runId));
+      if (hit?.name) {
+        await db.update(schema.simulationRuns).set({ executionName: hit.name }).where(eq(schema.simulationRuns.id, runId));
+        const [row] = await db
+          .select({ status: schema.simulationRuns.status })
+          .from(schema.simulationRuns)
+          .where(eq(schema.simulationRuns.id, runId))
+          .limit(1);
+        if (row?.status === "cancelled") await cancelExecutionByName(hit.name);
+        return hit.name;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  } catch {
+    // best effort - cancel re-resolves on demand
+  }
+  return "";
+}
+
+export type CancelOutcome = "not-found" | "not-cancellable" | "ok";
+
+/** User-initiated cancel. Marks the row first so no dispatch can pick it up,
+ *  sweeps secrets, then kills the Cloud Run execution when one exists (a
+ *  still-queued run has no execution yet - nothing to kill). */
+export async function cancelRun(runId: string, userId: string): Promise<CancelOutcome> {
+  assertCloudSimEnabled();
+  const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
+  if (!row || row.userId !== userId) return "not-found";
+  if (row.status !== "queued" && row.status !== "running") return "not-cancellable";
+  await db.update(schema.simulationRuns).set({ status: "cancelled", updatedAt: new Date().toISOString() }).where(eq(schema.simulationRuns.id, runId));
+  void deleteRunSecrets(runId);
+  const execName = row.executionName ?? (await recordExecutionForRun(runId));
+  await cancelExecutionByName(execName);
+  return "ok";
+}
+
 /** Push a dispatch task onto the queue. Returns the created task name.
  *  Trigger inputs ride the task body (they are not secret and stay small);
  *  dispatch forwards them to the runner as CLI flags. */
@@ -282,6 +356,9 @@ export async function dispatchRun(runId: string, triggerInput?: { httpPayload?: 
     await db.update(schema.simulationRuns).set({ status: "queued", updatedAt: new Date().toISOString() }).where(eq(schema.simulationRuns.id, runId));
     throw err;
   }
+  // Phase 4 Slice 4B: resolve the created execution (RUN_ID env match) in the
+  // background and store it on the row - this is what cancel/stale-kill target.
+  void recordExecutionForRun(runId);
   return "ok";
 }
 
@@ -317,7 +394,7 @@ async function loadEvents(runId: string): Promise<SimulationEvent[]> {
   return events.slice(-MAX_EVENTS);
 }
 
-const TERMINAL_STATUSES = new Set(["succeeded", "failed", "auth_error", "timeout"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "auth_error", "timeout", "cancelled"]);
 
 /**
  * Move a row towards its final state from the uploaded result object. Running
@@ -347,6 +424,8 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
       return { row: updated ?? { ...row, ...patch }, events };
     }
     if (Date.now() - new Date(row.updatedAt).getTime() > STALE_RUNNING_MS) {
+      // Phase 4 Slice 4B: kill the Cloud Run execution too, not just the row.
+      await cancelExecutionByName(row.executionName ?? "");
       const patch = { status: "failed", errorClass: "stale", updatedAt: now };
       const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
       void deleteRunSecrets(row.id);

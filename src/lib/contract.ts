@@ -167,6 +167,14 @@ export const simulateEnqueueResponseSchema = z.object({
 });
 export type SimulateEnqueueResponse = z.infer<typeof simulateEnqueueResponseSchema>;
 
+export const simulateCancelInput = z.object({ runId: z.string().uuid() });
+export type SimulateCancelInput = z.infer<typeof simulateCancelInput>;
+
+export const simulateCancelResponseSchema = z.object({
+  status: z.enum(["ok", "not-found", "not-cancellable"]),
+});
+export type SimulateCancelResponse = z.infer<typeof simulateCancelResponseSchema>;
+
 export const simulateRunSchema = z.object({
   id: z.string(),
   flowId: z.string().nullable(),

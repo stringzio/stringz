@@ -18,6 +18,7 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   failed: { label: "Run failed", className: "bg-[#FBE9EC] text-[#C0435A]" },
   auth_error: { label: "Runner auth hiccup", className: "bg-[#FBE9EC] text-[#C0435A]" },
   timeout: { label: "Run timed out", className: "bg-[#FBE9EC] text-[#C0435A]" },
+  cancelled: { label: "Run cancelled", className: "bg-gray-100 text-gray-500" },
 };
 
 /** Strip the "ts [USER LOG] id: " prefix from a node event line. */
@@ -32,12 +33,13 @@ function elapsed(state: CloudRunState, now: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-export function CloudRunDetail({ state }: { state: CloudRunState }) {
+export function CloudRunDetail({ state, onCancel }: { state: CloudRunState; onCancel?: () => void }) {
   // 0 until the effect ticks (react-hooks/purity forbids Date.now() in render);
   // elapsed() clamps, so the first paint just shows "0s".
   const [now, setNow] = useState(0);
   const logRef = useRef<HTMLDivElement>(null);
   const terminal = isTerminal(state.phase);
+  const cancellable = !terminal && (state.phase === "queued" || state.phase === "running");
 
   useEffect(() => {
     if (terminal) return;
@@ -80,6 +82,15 @@ export function CloudRunDetail({ state }: { state: CloudRunState }) {
           {terminal ? "finished" : elapsed(state, now)}
         </span>
       </div>
+
+      {cancellable && onCancel && (
+        <button
+          onClick={onCancel}
+          className="mb-3 w-full rounded-full bg-[#FBE9EC] py-2.5 text-[12.5px] font-semibold text-[#C0435A] transition active:scale-[0.98]"
+        >
+          Cancel run
+        </button>
+      )}
 
       {state.phase === "auth_error" && (
         <p className="mb-3 rounded-2xl bg-gray-50 px-4 py-3 text-[11.5px] leading-snug text-gray-500">
@@ -203,6 +214,7 @@ export default function CloudRunSheet({
   state,
   requiredSecrets,
   onStart,
+  onCancel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -210,11 +222,13 @@ export default function CloudRunSheet({
   /** Env-var secrets the compiled flow needs; empty = start immediately. */
   requiredSecrets: string[];
   onStart: (secrets: Record<string, string>) => void;
+  /** Phase 4 Slice 4B: kills a queued/running run (server + local stream). */
+  onCancel?: () => void;
 }) {
   return (
     <Sheet open={open} onClose={onClose} title="Test in cloud">
       {state ? (
-        <CloudRunDetail state={state} />
+        <CloudRunDetail state={state} onCancel={onCancel} />
       ) : requiredSecrets.length > 0 ? (
         <SecretPreflight requiredSecrets={requiredSecrets} onStart={onStart} />
       ) : (

@@ -21,11 +21,14 @@ import {
   simulateEnqueueInput,
   simulateRunSchema,
   simulateListResponseSchema,
+  simulateCancelInput,
+  simulateCancelResponseSchema,
   type PublicUser,
 } from "../../../src/lib/contract";
 import {
   assertCloudSimEnabled,
   assertRateLimits,
+  cancelRun,
   srcObjectUri,
   signUploadUrl,
   enqueueTask,
@@ -343,6 +346,12 @@ export const appRouter = router({
       if (!row || row.userId !== ctx.user.id) throw new Error("Not found");
       const reconciled = await reconcileRun(row);
       return simulateRunSchema.parse({ ...runShape(reconciled.row), events: reconciled.events });
+    }),
+
+    /** User-initiated cancel (Phase 4 Slice 4B): kills a queued/running run. */
+    cancel: protectedProcedure.input(simulateCancelInput).mutation(async ({ input, ctx }) => {
+      const status = await cancelRun(input.runId, ctx.user.id);
+      return simulateCancelResponseSchema.parse({ status });
     }),
 
     /** Recent runs for the Simulations screen; aggregations happen client-side. */
