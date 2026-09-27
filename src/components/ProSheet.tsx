@@ -20,6 +20,23 @@ const PRO = [
 ];
 
 const CHAIN_ID: Record<PayChain, number> = { base: base.id, arbitrum: arbitrum.id, avalanche: avalanche.id, ethereum: mainnet.id };
+
+/** Map wallet/provider errors to something a human can act on. Raw viem dumps
+ *  (chain mismatch, revert data) stay out of the UI; the raw message is kept
+ *  in the console for debugging. */
+function friendlyPaymentError(err: unknown, network: string, symbol: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/does not match the target chain|Current Chain ID|chain mismatch/i.test(raw))
+    return `Your wallet is on the wrong network. Switch to ${network} in your wallet, then try again.`;
+  if (/user rejected|user denied|cancelled|canceled/i.test(raw))
+    return "You cancelled the transaction in your wallet. Nothing was sent.";
+  if (/insufficient funds|exceeds balance|not enough/i.test(raw))
+    return `Your wallet does not have enough ${symbol} on ${network} for this payment.`;
+  if (/timeout|timed out/i.test(raw))
+    return "The network did not respond in time. Check your wallet - if the payment went out, do not retry; contact us.";
+  console.warn("[checkout] raw payment error:", raw);
+  return "The payment could not be completed. Check your wallet and network, then try again.";
+}
 const ERC20_TRANSFER_ABI = [
   { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [
     { name: "to", type: "address" }, { name: "amount", type: "uint256" },
@@ -54,7 +71,7 @@ export default function ProSheet({
 
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
-  const { switchChain } = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
   const priceCents = annual ? pro.annualCents : pro.monthlyCents;
@@ -70,7 +87,10 @@ export default function ProSheet({
     setStep("paying");
     setError("");
     try {
-      if (switchChain) await switchChain({ chainId: CHAIN_ID[chain] });
+      // switchChainAsync actually awaits the wallet prompt; the sync variant
+      // swallows rejections and leaves the wallet on the wrong chain, which
+      // surfaces later as viem's raw chain-mismatch dump.
+      if (switchChainAsync) await switchChainAsync({ chainId: CHAIN_ID[chain] });
       const txHash = await writeContractAsync({
         chainId: CHAIN_ID[chain],
         address: token.address as `0x${string}`,
@@ -82,7 +102,7 @@ export default function ProSheet({
       setPaidThrough(result.paidThrough);
       setStep("success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The payment could not be completed.");
+      setError(friendlyPaymentError(err, dest.label, token.symbol));
       setStep("error");
     }
   };
