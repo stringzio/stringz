@@ -20,6 +20,23 @@ const PRO = [
 ];
 
 const CHAIN_ID: Record<PayChain, number> = { base: base.id, arbitrum: arbitrum.id, avalanche: avalanche.id, ethereum: mainnet.id };
+
+/** Map wallet/provider errors to something a human can act on. Raw viem dumps
+ *  (chain mismatch, revert data) stay out of the UI; the raw message is kept
+ *  in the console for debugging. */
+function friendlyPaymentError(err: unknown, network: string, symbol: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/does not match the target chain|Current Chain ID|chain mismatch/i.test(raw))
+    return `Your wallet is on the wrong network. Switch to ${network} in your wallet, then try again.`;
+  if (/user rejected|user denied|cancelled|canceled/i.test(raw))
+    return "You cancelled the transaction in your wallet. Nothing was sent.";
+  if (/insufficient funds|exceeds balance|not enough/i.test(raw))
+    return `Your wallet does not have enough ${symbol} on ${network} for this payment.`;
+  if (/timeout|timed out/i.test(raw))
+    return "The network did not respond in time. Check your wallet - if the payment went out, do not retry; contact us.";
+  console.warn("[checkout] raw payment error:", raw);
+  return "The payment could not be completed. Check your wallet and network, then try again.";
+}
 const ERC20_TRANSFER_ABI = [
   { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [
     { name: "to", type: "address" }, { name: "amount", type: "uint256" },
@@ -54,7 +71,7 @@ export default function ProSheet({
 
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
-  const { switchChain } = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
   const priceCents = annual ? pro.annualCents : pro.monthlyCents;
@@ -70,7 +87,10 @@ export default function ProSheet({
     setStep("paying");
     setError("");
     try {
-      if (switchChain) await switchChain({ chainId: CHAIN_ID[chain] });
+      // switchChainAsync actually awaits the wallet prompt; the sync variant
+      // swallows rejections and leaves the wallet on the wrong chain, which
+      // surfaces later as viem's raw chain-mismatch dump.
+      if (switchChainAsync) await switchChainAsync({ chainId: CHAIN_ID[chain] });
       const txHash = await writeContractAsync({
         chainId: CHAIN_ID[chain],
         address: token.address as `0x${string}`,
@@ -82,7 +102,7 @@ export default function ProSheet({
       setPaidThrough(result.paidThrough);
       setStep("success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The payment could not be completed.");
+      setError(friendlyPaymentError(err, dest.label, token.symbol));
       setStep("error");
     }
   };
@@ -102,7 +122,8 @@ export default function ProSheet({
               {feature} is a Pro feature.
             </p>
           )}
-          <div className="mb-3 rounded-2xl bg-gray-50 p-4">
+          <div className="md:grid md:grid-cols-2 md:gap-3">
+          <div className="mb-3 rounded-2xl bg-gray-50 p-4 md:mb-0">
             <div className="flex items-center justify-between">
               <span className="text-[14px] font-bold text-[#1a1a1a]">Community</span>
               <span className="rounded-full bg-white px-3 py-1 text-[10.5px] font-bold text-gray-500 shadow-sm">$0 · current</span>
@@ -138,6 +159,7 @@ export default function ProSheet({
               Pay with USDC / USDT
             </button>
           </div>
+          </div>
           <p className="mt-4 text-center text-[11px] leading-snug text-gray-400">
             Pro runs in the cloud we operate - that is how the open core gets funded. Self-hosting the
             open-source builder stays free forever.
@@ -146,7 +168,8 @@ export default function ProSheet({
       )}
 
       {step === "checkout" && (
-        <div>
+        <div className="md:grid md:grid-cols-[1fr_300px] md:gap-8">
+          <div>
           <div className="mb-3 grid grid-cols-2 gap-2">
             {(["monthly", "annual"] as const).map((m) => (
               <button
@@ -185,6 +208,8 @@ export default function ProSheet({
               </button>
             ))}
           </div>
+          </div>
+          <div className="md:border-l md:border-gray-100 md:pl-8 md:flex md:flex-col md:justify-center">
           <div className="mb-4 flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3">
             <span className="text-[12px] font-medium text-gray-500">You send</span>
             <span className="text-[15px] font-bold text-[#1a1a1a]">
@@ -206,11 +231,12 @@ export default function ProSheet({
             One payment, {annual ? "12 months" : "30 days"} of Pro. No auto-renewal - extend any time with a
             new payment. Self-custody: the transfer goes straight from your wallet.
           </p>
+          </div>
         </div>
       )}
 
       {step === "paying" && (
-        <div className="flex flex-col items-center py-10">
+        <div className="flex flex-col items-center py-10 md:max-w-md md:mx-auto">
           <Loader2 size={28} className="animate-spin text-[#3d5f8a]" />
           <p className="mt-4 text-[13px] font-semibold text-[#1a1a1a]">Confirm in your wallet…</p>
           <p className="mt-1 max-w-56 text-center text-[11.5px] leading-snug text-gray-400">
@@ -220,7 +246,7 @@ export default function ProSheet({
       )}
 
       {step === "success" && (
-        <div className="flex flex-col items-center py-4">
+        <div className="flex flex-col items-center py-4 md:max-w-md md:mx-auto">
           <img src="/assets/payment-success.webp" alt="Payment successful" className="h-40 w-auto" />
           <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Welcome to Pro</p>
           <p className="mt-1.5 max-w-60 text-center text-[12px] leading-snug text-gray-500">
@@ -238,7 +264,7 @@ export default function ProSheet({
       )}
 
       {step === "error" && (
-        <div className="flex flex-col items-center py-4">
+        <div className="flex flex-col items-center py-4 md:max-w-md md:mx-auto">
           <img src="/assets/payment-error.webp" alt="Payment failed" className="h-36 w-auto" />
           <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Payment did not go through</p>
           <p className="mt-1.5 max-w-64 text-center text-[12px] leading-snug text-gray-500">{error}</p>

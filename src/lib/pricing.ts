@@ -28,8 +28,10 @@ export const PLANS: readonly PlanInfo[] = [
     tier: "pro",
     name: "Pro",
     tag: "For serious builders",
-    monthlyCents: 1900,
-    annualCents: 19000,
+    // TEST PRICE (owner 2026-09-27): $0.10 so the live payment path can be
+    // exercised cheaply. Revert to 1900 / 19000 and drop these comments after.
+    monthlyCents: 10,
+    annualCents: 100,
     monthlySims: 1000,
     cta: "Get started",
   },
