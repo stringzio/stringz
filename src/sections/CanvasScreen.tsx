@@ -144,6 +144,7 @@ export default function CanvasScreen({
   const [runSources, setRunSources] = useState<Record<string, RunSource>>({});
   const [runErrors, setRunErrors] = useState<Record<string, string>>({});
   const [cloud, setCloud] = useState<CloudRunState | null>(null);
+  const [proFeature, setProFeature] = useState<string | null>(null);
   const cloudAbort = useRef<AbortController | null>(null);
   const [pinned, setPinned] = useState<Record<string, Json>>({});
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -554,6 +555,14 @@ export default function CanvasScreen({
       .catch((err) => {
         if (ac.signal.aborted) return;
         const note = err instanceof Error ? err.message : "Could not start the cloud run";
+        // Phase 5: a tier-quota rejection routes to the upgrade sheet instead
+        // of leaving the user at a dead-end error.
+        if (note.includes("Free tier includes")) {
+          setSheet(null);
+          setCloud(null);
+          setProFeature("More cloud simulations");
+          return;
+        }
         setCloud((prev) =>
           prev
             ? { ...prev, phase: "failed", note }
@@ -871,7 +880,6 @@ export default function CanvasScreen({
     </button>
   );
 
-  const [proFeature, setProFeature] = useState<string | null>(null);
 
   const saveFlow = async () => {
     try {

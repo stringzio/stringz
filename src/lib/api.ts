@@ -67,8 +67,9 @@ export const api = {
     remove: (input: { id: string }) => call<{ ok: boolean }>("flows.remove", input),
   },
   billing: {
-    /** Hosted checkout URL for the configured rail; throws until keys exist. */
-    checkout: () => call<{ url: string }>("billing.checkout", {}),
+    /** Verify a wallet payment with the stringz-pay rail (server-held key). */
+    verify: (input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" | "team_monthly" | "team_annual" }) =>
+      call<{ credited: boolean; alreadyCredited: boolean; plan: string; paidThrough: string }>("billing.verify", input),
     entitlements: () => call<BillingEntitlements>("billing.entitlements"),
   },
   onboarding: {

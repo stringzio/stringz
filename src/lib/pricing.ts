@@ -65,3 +65,49 @@ export const planByTier = (tier: Tier): PlanInfo =>
 
 export const usd = (cents: number): string =>
   cents === 0 ? "$0" : `$${(cents / 100).toLocaleString("en-US")}`;
+
+// ── Chain destinations for checkout (mirror of the stringz-pay registry) ─────
+
+export type PayChain = "base" | "arbitrum" | "avalanche" | "ethereum";
+
+export interface TokenDest {
+  symbol: "USDC" | "USDT";
+  address: string;
+}
+
+export const TREASURY_EVM = "0x3Ef1fdc85B26FC45625f737A0a72AAEe9b77e5D2";
+
+export const PAY_CHAINS: readonly { id: PayChain; label: string; tokens: TokenDest[] }[] = [
+  {
+    id: "base",
+    label: "Base",
+    tokens: [
+      { symbol: "USDC", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+      { symbol: "USDT", address: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2" },
+    ],
+  },
+  {
+    id: "arbitrum",
+    label: "Arbitrum",
+    tokens: [{ symbol: "USDC", address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" }],
+  },
+  {
+    id: "avalanche",
+    label: "Avalanche",
+    tokens: [
+      { symbol: "USDC", address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E" },
+      { symbol: "USDT", address: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7" },
+    ],
+  },
+  {
+    id: "ethereum",
+    label: "Ethereum",
+    tokens: [
+      { symbol: "USDC", address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" },
+      { symbol: "USDT", address: "0xdAC17F958D2ee523a2206206994597C13D831ec7" },
+    ],
+  },
+] as const;
+
+/** A 6-decimal stable's base units equal USD cents at 10^4:1 ($19.00 -> 19_000_000n). */
+export const chargeUnits = (cents: number): bigint => BigInt(cents) * 10_000n;

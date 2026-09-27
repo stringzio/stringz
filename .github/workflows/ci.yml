@@ -109,8 +109,8 @@ jobs:
             --region=${{ vars.GCP_REGION }} \
             --service-account=flowkit-api-run@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
             --add-cloudsql-instances=${{ vars.GCP_PROJECT_ID }}:${{ vars.GCP_REGION }}:flowkit-db \
-            --set-secrets=DATABASE_URL=flowkit-database-url-internal:latest,GITHUB_CLIENT_SECRET=flowkit-github-secret:latest \
-            --set-env-vars=NODE_ENV=production,SERVER_PORT=8080,GITHUB_CLIENT_ID=${{ vars.GH_OAUTH_CLIENT_ID }},PUBLIC_APP_URL=${{ vars.PUBLIC_APP_URL }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},SIM_BUCKET=stringz-sim-projects,SIM_QUEUE=simulation-dispatch,SIM_QUEUE_LOCATION=${{ vars.GCP_REGION }},SIM_JOB_NAME=sim-runner,SIM_JOB_LOCATION=${{ vars.GCP_REGION }} \
+            --set-secrets=DATABASE_URL=flowkit-database-url-internal:latest,GITHUB_CLIENT_SECRET=flowkit-github-secret:latest,STRINGZ_PAY_API_KEY=stringz-pay-api-key:latest \
+            --set-env-vars=NODE_ENV=production,SERVER_PORT=8080,GITHUB_CLIENT_ID=${{ vars.GH_OAUTH_CLIENT_ID }},PUBLIC_APP_URL=${{ vars.PUBLIC_APP_URL }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},SIM_BUCKET=stringz-sim-projects,SIM_QUEUE=simulation-dispatch,SIM_QUEUE_LOCATION=${{ vars.GCP_REGION }},SIM_JOB_NAME=sim-runner,SIM_JOB_LOCATION=${{ vars.GCP_REGION }},STRINGZ_PAY_URL=https://stringz-pay-35dphqdsea-uc.a.run.app \
             --memory=512Mi --cpu=1 --concurrency=40 --min-instances=0 --max-instances=10 \
             --allow-unauthenticated --project=${{ vars.GCP_PROJECT_ID }} --quiet
       - name: Wait for health
