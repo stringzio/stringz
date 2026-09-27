@@ -6,7 +6,8 @@ import { parseSiweMessage } from "viem/siwe";
 import { publicProcedure, protectedProcedure, router } from "./trpc";
 import { db, schema } from "../db/client";
 import { createSession, destroySession, issueNonce, consumeNonce } from "../session";
-import { getProvider, PLANS } from "../billing";
+import { PLANS } from "../billing";
+import { verifyPayment } from "../stringzPay";
 import {
   waitlistJoinInput,
   newsletterSubscribeInput,
@@ -233,15 +234,13 @@ export const appRouter = router({
   }),
 
   billing: router({
-    /** Returns the hosted checkout URL for the configured rail. */
-    checkout: protectedProcedure.mutation(async ({ ctx }) => {
-      const provider = getProvider();
-      if (!provider) {
-        throw new Error("Billing is not live yet - the payment rail keys are being provisioned.");
-      }
-      const baseUrl = process.env.PUBLIC_APP_URL ?? "http://localhost:3000";
-      return provider.createCheckout({ userId: ctx.user.id, email: ctx.user.email, baseUrl });
-    }),
+    /** Phase 5 wiring: verify a wallet payment with stringz-pay (server-held
+     *  key) and credit this user's entitlement. */
+    verify: protectedProcedure
+      .input(z.object({ chain: z.string(), txHash: z.string(), plan: z.enum(["pro_monthly", "pro_annual", "team_monthly", "team_annual"]) }))
+      .mutation(async ({ input, ctx }) => {
+        return verifyPayment({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+      }),
     /** Phase 5C: effective tier, quota usage, and paid-through date. */
     entitlements: protectedProcedure.query(async ({ ctx }) => {
       return billingEntitlementsSchema.parse(await getEntitlements(ctx.user.id));
