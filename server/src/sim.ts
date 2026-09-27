@@ -357,21 +357,33 @@ export async function dispatchRun(runId: string, triggerInput?: { httpPayload?: 
   if (!row) return "not-found";
   if (row.status !== "queued") return "not-queued";
   // Phase 4 Slice 4C: refuse oversized projects BEFORE starting a job (the
-  // signed PUT itself cannot be size-capped). A missing object means the
-  // client upload is still racing the task - fall through and let the runner
-  // surface that as today.
-  try {
-    const [meta] = await getStorage().bucket(bucketName).file(projectObject(runId)).getMetadata();
-    const size = Number((meta as { size?: string }).size ?? 0);
+  // signed PUT itself cannot be size-capped). The client uploads right after
+  // enqueue, so the object may not exist yet when this task fires - poll for
+  // it briefly (the live 4C validation caught the race: a slow PUT let the
+  // task through before the object landed, dispatching a job that died on a
+  // 404 download and held the row 'running' until the stale sweep). A still-
+  // missing object after the grace window falls through to the runner, which
+  // surfaces it as today.
+  const projectFile = getStorage().bucket(bucketName).file(projectObject(runId));
+  let meta: { size?: string } | null = null;
+  for (let attempt = 0; attempt < 15 && !meta; attempt++) {
+    try {
+      const [m] = await projectFile.getMetadata();
+      meta = m as { size?: string };
+    } catch (err) {
+      if ((err as { code?: number }).code !== 404) break; // real error - let the runner deal
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  if (meta) {
+    const size = Number(meta.size ?? 0);
     if (size > MAX_PROJECT_BYTES) {
       const patch = { status: "failed", errorClass: "payload_too_large", updatedAt: new Date().toISOString() };
       await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, runId));
-      void getStorage().bucket(bucketName).file(projectObject(runId)).delete();
+      void projectFile.delete();
       void deleteRunSecrets(runId);
       return "ok";
     }
-  } catch {
-    // not uploaded yet, or a transient GCS error - the runner handles both
   }
   const now = new Date().toISOString();
   await db.update(schema.simulationRuns).set({ status: "running", updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
