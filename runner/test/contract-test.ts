@@ -4,6 +4,7 @@
 //
 // Run: bun runner/test/contract-test.ts
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 import { classifyLine, scrubSecrets, loadSecretValues } from "../lib/stream-classify";
@@ -495,6 +496,93 @@ function runTriggerInputTest() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 runTriggerInputTest();
+
+// --- Phase 4 Slice 4C: payload + log caps ------------------------------------
+// Payload: an archive over SIM_MAX_PROJECT_BYTES dies before the CLI ever
+// runs. Log cap: runaway CLI output is trimmed to the last SIM_MAX_LOG_BYTES
+// for the event stream, flagged, and the success markers at the tail survive.
+
+function runCapsTest() {
+  const buildTgz = (dir: string, padBytes: number) => {
+    const projDir = path.join(dir, "proj");
+    fs.mkdirSync(path.join(projDir, "demo-workflow"), { recursive: true });
+    fs.writeFileSync(path.join(projDir, "project.yaml"), 'name: "demo"\n');
+    fs.writeFileSync(path.join(projDir, ".env.example"), "CRE_ETH_PRIVATE_KEY=\n");
+    fs.writeFileSync(path.join(projDir, "demo-workflow", "package.json"), '{"name":"demo-workflow","private":true}\n');
+    // Incompressible padding - repeated bytes gzip away to nothing.
+    if (padBytes > 0) fs.writeFileSync(path.join(projDir, "demo-workflow", "pad.bin"), randomBytes(padBytes));
+    const out = path.join(dir, "project.tgz");
+    spawnSync("tar", ["-czf", out, "-C", projDir, "."], { stdio: "inherit" });
+    return out;
+  };
+
+  // Payload cap.
+  {
+    const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
+    const stubDir = path.join(tmp, "bin");
+    fs.mkdirSync(stubDir);
+    fs.writeFileSync(path.join(stubDir, "timeout"), TIMEOUT_STUB, { mode: 0o755 });
+    const argvFile = path.join(tmp, "cap.argv");
+    fs.writeFileSync(path.join(stubDir, "cre"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argvFile}"\ncat "${path.join(fixtures, "success.log")}"\nexit 0\n`,
+      { mode: 0o755 });
+    const bigTgz = buildTgz(tmp, 8192);
+    const res = spawnSync("bash", [path.join(root, "entry.sh")], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${process.env.PATH}`,
+        SRC_URL: `file://${bigTgz}`,
+        SIM_TIMEOUT: "30",
+        SIM_MAX_PROJECT_BYTES: "1024",
+        HOME: tmp,
+      } as NodeJS.ProcessEnv,
+    });
+    check("entry.sh payload cap: oversized archive dies before the CLI runs",
+      res.status === 1 && !fs.existsSync(argvFile) && (res.stderr ?? "").includes("project archive"),
+      { status: res.status, stderrTail: (res.stderr ?? "").split("\n").slice(-6) });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // Log cap.
+  {
+    const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
+    const stubDir = path.join(tmp, "bin");
+    fs.mkdirSync(stubDir);
+    fs.writeFileSync(path.join(stubDir, "timeout"), TIMEOUT_STUB, { mode: 0o755 });
+    const spew = `#!/usr/bin/env bash
+for i in $(seq 1 1500); do
+  printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'
+done
+cat "${path.join(fixtures, "success.log")}"
+exit 0
+`;
+    fs.writeFileSync(path.join(stubDir, "cre"), spew, { mode: 0o755 });
+    const tgz = buildTgz(tmp, 0);
+    const eventsFile = path.join(tmp, "events.ndjson");
+    const res = spawnSync("bash", [path.join(root, "entry.sh")], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${process.env.PATH}`,
+        SRC_URL: `file://${tgz}`,
+        SIM_TIMEOUT: "30",
+        SIM_MAX_LOG_BYTES: "50000",
+        RESULT_URL: `file://${eventsFile}`,
+        HOME: tmp,
+      } as NodeJS.ProcessEnv,
+    });
+    const events = fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, "utf8") : "";
+    const lastLine = events.trim().split("\n").pop() ?? "";
+    check("entry.sh log cap: oversized runner output trimmed + flagged, success markers survive",
+      res.status === 0 && events.length > 5000 && events.length < 100000 &&
+        events.includes("trimmed to the last 50000 bytes") &&
+        lastLine.includes('"t":"result"') && lastLine.includes('"status":"succeeded"'),
+      { status: res.status, eventsBytes: events.length, lastLine: lastLine.slice(0, 120) });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+runCapsTest();
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

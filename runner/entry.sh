@@ -37,6 +37,11 @@
 #   EVM_TX_HASH   optional (Phase 3). Passed as --evm-tx-hash when set.
 #   SECRETS_JSON  optional. Local-dev equivalent of SECRETS_URL (env-delivered
 #                 JSON, same merge + redaction).
+#   SIM_MAX_PROJECT_BYTES optional (Phase 4 Slice 4C), default 10485760 (10 MB).
+#                 Project archives over this die before extraction.
+#   SIM_MAX_LOG_BYTES optional (Phase 4 Slice 4C), default 5242880 (5 MB).
+#                 Runaway runner output is trimmed to the last N bytes for the
+#                 event stream (status markers live at the tail) and flagged.
 #
 # OUTPUT CONTRACT
 #   stdout: pure NDJSON event stream, one object per line.
@@ -145,6 +150,16 @@ case "$SRC_URL" in
     die "unsupported SRC_URL scheme (want https:// or file://): ${SRC_URL%%://*}://"
     ;;
 esac
+
+# --- Phase 4 Slice 4C: payload cap. The API measures the uploaded object at
+# dispatch and refuses before any job starts; this re-checks at the runner for
+# file:// sources and any path that skips dispatch (local runs).
+MAX_PROJECT_BYTES="${SIM_MAX_PROJECT_BYTES:-10485760}"
+case "$MAX_PROJECT_BYTES" in ''|*[!0-9]*) die "SIM_MAX_PROJECT_BYTES must be bytes as an integer, got '$MAX_PROJECT_BYTES'" ;; esac
+tgz_size=$(wc -c < "$tgz")
+if [ "$tgz_size" -gt "$MAX_PROJECT_BYTES" ]; then
+  die "project archive is ${tgz_size} bytes (max ${MAX_PROJECT_BYTES})"
+fi
 
 # --- extract and locate the workflow dir
 tar -xzf "$tgz" -C "$proj" || die "archive extraction failed (want gzip tarball of the project root)"
@@ -271,6 +286,19 @@ cli_code=$?
 cd - >/dev/null || true
 log "CLI exited code=$cli_code (informational only; status comes from output markers)"
 
+# --- Phase 4 Slice 4C: log cap. A runaway workflow can spew unbounded output;
+# keep only the last SIM_MAX_LOG_BYTES for the event stream (status markers
+# live at the tail) and flag the trim. The live tailer is unaffected - the API
+# caps per-event and per-batch at ingest.
+MAX_LOG_BYTES="${SIM_MAX_LOG_BYTES:-5242880}"
+case "$MAX_LOG_BYTES" in ''|*[!0-9]*) die "SIM_MAX_LOG_BYTES must be bytes as an integer, got '$MAX_LOG_BYTES'" ;; esac
+logsrc="$rawlog"
+if [ "$(wc -c < "$rawlog")" -gt "$MAX_LOG_BYTES" ]; then
+  tail -c "$MAX_LOG_BYTES" "$rawlog" > "$workdir/raw.log.trimmed" || die "cannot trim oversized runner log"
+  logsrc="$workdir/raw.log.trimmed"
+  log "WARN runner log exceeded ${MAX_LOG_BYTES} bytes; event stream trimmed to the last bytes"
+fi
+
 # --- destroy the run's secrets object at ACTUAL run end (the API also purges
 # at reconcile; this covers runs nobody ever polls again). Best effort: a
 # failure here is a stderr warning, never a status change.
@@ -285,7 +313,7 @@ fi
 # result event must be posted after every log/node event, so it goes to the
 # file before the done marker, and we wait for the tailer to exit.
 if [ -n "$stream_pid" ]; then
-  classify_emit_summary "$rawlog" "$cli_code" "$RUN_ID" > "$workdir/result-event.json"
+  classify_emit_summary "$logsrc" "$cli_code" "$RUN_ID" > "$workdir/result-event.json"
   : > "$workdir/cli-done"
   waited=0
   while kill -0 "$stream_pid" 2>/dev/null && [ "$waited" -lt 60 ]; do
@@ -306,9 +334,12 @@ fi
 events="$workdir/events.ndjson"
 : > "$events"
 [ -n "${SECRET_VALUES_FILE:-}" ] && classify_redact_init "$SECRET_VALUES_FILE"
-classify_emit_events "$rawlog" "$RUN_ID" | tee -a "$events"
-classify_emit_summary "$rawlog" "$cli_code" "$RUN_ID" | tee -a "$events"
-status="$(classify_status "$rawlog" "$cli_code")"
+classify_emit_events "$logsrc" "$RUN_ID" | tee -a "$events"
+if [ "$logsrc" != "$rawlog" ]; then
+  printf '{"t":"log","line":"[sim-entry] runner log exceeded the cap; stream trimmed to the last %s bytes"}\n' "$MAX_LOG_BYTES" | tee -a "$events"
+fi
+classify_emit_summary "$logsrc" "$cli_code" "$RUN_ID" | tee -a "$events"
+status="$(classify_status "$logsrc" "$cli_code")"
 
 # --- upload the event stream (best effort; never changes status/exit code)
 if [ -n "${RESULT_URL:-}" ]; then

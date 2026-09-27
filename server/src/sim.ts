@@ -51,6 +51,14 @@ export const RATE_LIMIT_MAX_INFLIGHT = intFromEnv(process.env.SIM_RATE_MAX_INFLI
 /** Rolling window for the runs cap. */
 export const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+// ── Phase 4 Slice 4C: payload + log caps ─────────────────────────────────────
+//
+// Signed-URL PUT cannot be size-capped, so dispatch measures the uploaded
+// object and refuses before any job starts. The runner re-checks
+// post-download for file:// sources and local runs.
+/** Max compiled-project size in bytes (env: SIM_MAX_PROJECT_BYTES). */
+export const MAX_PROJECT_BYTES = intFromEnv(process.env.SIM_MAX_PROJECT_BYTES, 10 * 1024 * 1024);
+
 /** Enforce the per-user caps at enqueue time. Throws with a clear error when
  *  over budget. A per-user advisory xact lock serializes concurrent enqueues
  *  so two simultaneous requests cannot both pass the counts (READ COMMITTED
@@ -309,6 +317,23 @@ export async function dispatchRun(runId: string, triggerInput?: { httpPayload?: 
   const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
   if (!row) return "not-found";
   if (row.status !== "queued") return "not-queued";
+  // Phase 4 Slice 4C: refuse oversized projects BEFORE starting a job (the
+  // signed PUT itself cannot be size-capped). A missing object means the
+  // client upload is still racing the task - fall through and let the runner
+  // surface that as today.
+  try {
+    const [meta] = await getStorage().bucket(bucketName).file(projectObject(runId)).getMetadata();
+    const size = Number((meta as { size?: string }).size ?? 0);
+    if (size > MAX_PROJECT_BYTES) {
+      const patch = { status: "failed", errorClass: "payload_too_large", updatedAt: new Date().toISOString() };
+      await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, runId));
+      void getStorage().bucket(bucketName).file(projectObject(runId)).delete();
+      void deleteRunSecrets(runId);
+      return "ok";
+    }
+  } catch {
+    // not uploaded yet, or a transient GCS error - the runner handles both
+  }
   const now = new Date().toISOString();
   await db.update(schema.simulationRuns).set({ status: "running", updatedAt: now }).where(eq(schema.simulationRuns.id, runId));
   const [srcUrl, resultUrl, secretsUrl, secretsDeleteUrl] = await Promise.all([
