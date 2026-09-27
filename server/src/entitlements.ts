@@ -36,7 +36,8 @@ const simsUsedInLast30d = async (userId: string): Promise<number> => {
       sql`${schema.simulationRuns.userId} = ${userId}`,
       sql`${schema.simulationRuns.createdAt} >= ${windowStart}`,
     ));
-  return row?.count ?? 0;
+  // pg returns count(*) as a string (int8); normalize before the schema parse.
+  return Number(row?.count ?? 0);
 };
 
 function tierForPlan(plan: string | null | undefined): Tier {

@@ -132,7 +132,7 @@ export async function assertRateLimits(userId: string, tier: Tier): Promise<void
     .from(schema.simulationRuns)
     .where(sql`${schema.simulationRuns.userId} = ${userId} and ${schema.simulationRuns.createdAt} >= ${windowStart}`);
   const monthlyLimit = TIER_SIM_LIMITS[tier];
-  if ((recent?.count ?? 0) >= monthlyLimit) {
+  if (Number(recent?.count ?? 0) >= monthlyLimit) {
     throw new Error(
       tier === "community"
         ? `Free tier includes ${monthlyLimit} cloud simulations per 30 days - upgrade to Pro for 1,000, or export and self-host for unlimited.`
@@ -143,7 +143,7 @@ export async function assertRateLimits(userId: string, tier: Tier): Promise<void
     .select({ count: sql<number>`count(*)` })
     .from(schema.simulationRuns)
     .where(sql`${schema.simulationRuns.userId} = ${userId} and ${schema.simulationRuns.status} in ('queued', 'running')`);
-  if ((inflight?.count ?? 0) >= RATE_LIMIT_MAX_INFLIGHT) {
+  if (Number(inflight?.count ?? 0) >= RATE_LIMIT_MAX_INFLIGHT) {
     throw new Error(`Too many simulations in flight (max ${RATE_LIMIT_MAX_INFLIGHT}) - wait for one to finish.`);
   }
 }
