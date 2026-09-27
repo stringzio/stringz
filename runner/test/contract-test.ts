@@ -431,5 +431,70 @@ function runRedactionTest() {
 }
 runRedactionTest();
 
+// --- Phase 3 Slice 3B: trigger inputs reach the CLI invocation ---------------
+// The stub records its argv; entry.sh must add --http-payload <file> (with the
+// payload bytes) and --evm-tx-hash only when set, and never pass --broadcast.
+
+function runTriggerInputTest() {
+  const tmp = fs.mkdtempSync(path.join("/tmp", "sim-contract-"));
+  const stubDir = path.join(tmp, "bin");
+  fs.mkdirSync(stubDir);
+  fs.writeFileSync(path.join(stubDir, "timeout"), TIMEOUT_STUB, { mode: 0o755 });
+  const tgz = makeProjectTgz(tmp);
+  const entry = path.join(root, "entry.sh");
+  const baseEnv = {
+    ...process.env,
+    PATH: `${stubDir}:${process.env.PATH}`,
+    SRC_URL: `file://${tgz}`,
+    SIM_TIMEOUT: "30",
+    HOME: tmp,
+  } as NodeJS.ProcessEnv;
+  // Each run gets its own stub capture file so the two runs can never share
+  // state through the capture path; the payload bytes are copied at CLI time
+  // (the workdir is cleaned before the test can read them).
+  const writeCreStub = (capture: string) =>
+    fs.writeFileSync(
+      path.join(stubDir, "cre"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${capture}"\n` +
+        `prev=""; for a in "$@"; do if [ "$prev" = "--http-payload" ]; then cat "$a" > "${capture}.payload"; fi; prev="$a"; done\n` +
+        `cat "${path.join(fixtures, "success.log")}"\nexit 0\n`,
+      { mode: 0o755 },
+    );
+
+  const argvFile1 = path.join(tmp, "run1.argv");
+  writeCreStub(argvFile1);
+  const withInput = spawnSync("bash", [entry], {
+    encoding: "utf8",
+    env: {
+      ...baseEnv,
+      HTTP_PAYLOAD: JSON.stringify({ price: "2681.90", source: "test" }),
+      EVM_TX_HASH: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    },
+  });
+  const argvLines = fs.readFileSync(argvFile1, "utf8").split("\n").filter((l) => l.length > 0);
+  const flagIdx = argvLines.indexOf("--http-payload");
+  const payloadCaptured = fs.existsSync(`${argvFile1}.payload`) ? fs.readFileSync(`${argvFile1}.payload`, "utf8") : null;
+  check("entry.sh trigger inputs: --http-payload <file> + --evm-tx-hash passed with exact values",
+    withInput.status === 0 && flagIdx >= 0 && payloadCaptured === JSON.stringify({ price: "2681.90", source: "test" }) && argvLines.includes("--evm-tx-hash") && argvLines.includes("0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+    { status: withInput.status, argvLines, payloadCaptured });
+  check("entry.sh never passes --broadcast", !argvLines.includes("--broadcast"), {});
+
+  const argvFile2 = path.join(tmp, "run2.argv");
+  writeCreStub(argvFile2);
+  const withoutInput = spawnSync("bash", [entry], { encoding: "utf8", env: baseEnv });
+  if (!fs.existsSync(argvFile2)) {
+    check("entry.sh trigger inputs: flags omitted when unset", false,
+      { status: withoutInput.status, stderrTail: (withoutInput.stderr ?? "").split("\n").slice(-8) });
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return;
+  }
+  const argv2 = fs.readFileSync(argvFile2, "utf8").split("\n").filter((l) => l.length > 0);
+  check("entry.sh trigger inputs: flags omitted when unset",
+    withoutInput.status === 0 && !argv2.includes("--http-payload") && !argv2.includes("--evm-tx-hash"),
+    { argv2 });
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+runTriggerInputTest();
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

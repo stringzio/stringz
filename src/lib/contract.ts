@@ -137,6 +137,19 @@ export const simulateEnqueueInput = z.object({
   flowId: z.string().uuid().nullish(),
   triggerIdx: z.number().int().min(0).max(100).default(0),
   /**
+   * Phase 3 (Slice 3B): optional trigger inputs passed straight through to
+   * `cre workflow simulate` (`--http-payload <file>` / `--evm-tx-hash`). The
+   * generated workflows' triggers are cron (and log) today; payload-consuming
+   * HTTP triggers arrive with the http-trigger node in v0.1 - the plumbing is
+   * ready for them.
+   */
+  triggerInput: z
+    .object({
+      httpPayload: z.string().max(64 * 1024).optional(),
+      evmTxHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/, "evmTxHash must be a 32-byte 0x-prefixed hash").optional(),
+    })
+    .optional(),
+  /**
    * Phase 3: run-scoped ephemeral secrets (env var name -> value). The server
    * writes them to a run-scoped GCS object the runner downloads into the
    * sandbox .env; they are deleted when the run reaches a terminal state and

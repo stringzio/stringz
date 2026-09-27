@@ -32,6 +32,9 @@
 #                 scrubbed of them before it reaches stdout/GCS/ingest.
 #   SECRETS_DELETE_URL optional (Phase 3). Signed DELETE the runner uses to
 #                 destroy the secrets object at actual run end.
+#   HTTP_PAYLOAD  optional (Phase 3). Trigger input JSON, written to a file
+#                 and passed as --http-payload when set.
+#   EVM_TX_HASH   optional (Phase 3). Passed as --evm-tx-hash when set.
 #   SECRETS_JSON  optional. Local-dev equivalent of SECRETS_URL (env-delivered
 #                 JSON, same merge + redaction).
 #
@@ -244,12 +247,25 @@ log "installing workflow dependencies (bun)"
 # --- run the simulation from the PROJECT ROOT (where project.yaml lives).
 # The CLI's exit code is unreliable, so we classify by output markers instead.
 # timeout -k: SIGKILL 10s after SIGTERM if the CLI hangs.
-log "running: cre workflow simulate $(basename "$wfdir") --target $TARGET --non-interactive --trigger-index $TRIGGER_IDX"
+log "running: cre workflow simulate $(basename "$wfdir") --target $TARGET --non-interactive --trigger-index $TRIGGER_IDX${HTTP_PAYLOAD:+ --http-payload <file>}${EVM_TX_HASH:+ --evm-tx-hash $EVM_TX_HASH}"
 cd "$proj" || die "cannot cd into project dir"
+# Phase 3 Slice 3B: trigger inputs. The payload goes to a file (argv length
+# limits); the flags are only added when the values are set. Generated
+# workflows are cron/log-triggered today - payload-consuming HTTP triggers
+# land with the http-trigger node in v0.1.
+extra_flags=()
+if [ -n "${HTTP_PAYLOAD:-}" ]; then
+  printf '%s' "$HTTP_PAYLOAD" > "$workdir/http-payload.json"
+  extra_flags+=(--http-payload "$workdir/http-payload.json")
+fi
+if [ -n "${EVM_TX_HASH:-}" ]; then
+  extra_flags+=(--evm-tx-hash "$EVM_TX_HASH")
+fi
 timeout -k 10 "$SIM_TIMEOUT" cre workflow simulate "$wfdir" \
   --target "$TARGET" \
   --non-interactive \
   --trigger-index "$TRIGGER_IDX" \
+  ${extra_flags[@]+"${extra_flags[@]}"} \
   > "$rawlog" 2>&1
 cli_code=$?
 cd - >/dev/null || true

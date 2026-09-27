@@ -71,10 +71,16 @@ app.post("/sim-dispatch", async (c) => {
   const auth = c.req.header("Authorization");
   if (!(await verifyDispatchToken(auth, audience))) return c.json({ ok: false }, 401);
   try {
-    const body = (await c.req.json().catch(() => null)) as { runId?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as
+      | { runId?: unknown; httpPayload?: unknown; evmTxHash?: unknown }
+      | null;
     const runId = typeof body?.runId === "string" ? body.runId : "";
     if (!runId) return c.json({ ok: false, error: "runId is required" }, 400);
-    const outcome = await dispatchRun(runId);
+    const triggerInput = {
+      ...(typeof body?.httpPayload === "string" ? { httpPayload: body.httpPayload } : {}),
+      ...(typeof body?.evmTxHash === "string" ? { evmTxHash: body.evmTxHash } : {}),
+    };
+    const outcome = await dispatchRun(runId, triggerInput);
     if (outcome === "not-found") return c.json({ ok: false }, 404);
     if (outcome === "not-queued") return c.json({ ok: false }, 409);
     return c.json({ ok: true });
