@@ -114,12 +114,13 @@ export const simulationRuns = pgTable("simulation_runs", {
   id: text("id").primaryKey(), // crypto.randomUUID()
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   flowId: text("flow_id"), // nullable on purpose: runs may come from unsaved drafts (no FK)
-  status: text("status").notNull(), // queued | running | succeeded | failed | auth_error | timeout
+  status: text("status").notNull(), // queued | running | succeeded | failed | auth_error | timeout | cancelled
   triggerIdx: integer("trigger_idx").notNull().default(0),
   exitCode: integer("exit_code"),
   result: text("result"), // CLI result payload on success
   errorClass: text("error_class"), // runner status when failed: failed | auth_error | timeout | stale
   srcGcsUri: text("src_gcs_uri"), // gs:// URI of the uploaded project archive
+  executionName: text("execution_name"), // Phase 4B: Cloud Run execution path (enables cancel/kill)
   createdAt: text("created_at").notNull(), // ISO
   updatedAt: text("updated_at").notNull(), // ISO
 }, (t) => [index("simulation_runs_user_idx").on(t.userId)]);

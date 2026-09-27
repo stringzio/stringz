@@ -20,7 +20,8 @@ export type CloudPhase =
   | "succeeded"
   | "failed"
   | "auth_error"
-  | "timeout";
+  | "timeout"
+  | "cancelled";
 
 export interface CloudRunEvent {
   t: string;
@@ -36,7 +37,7 @@ export interface CloudRunState {
   startedAt: number;
 }
 
-const TERMINAL: CloudPhase[] = ["succeeded", "failed", "auth_error", "timeout"];
+const TERMINAL: CloudPhase[] = ["succeeded", "failed", "auth_error", "timeout", "cancelled"];
 const OVERALL_TIMEOUT_MS = 10 * 60 * 1000;
 const STATUS_POLL_MS = 8000;
 
@@ -140,7 +141,7 @@ export async function runCloudSimulation(opts: {
   const deadline = Date.now() + OVERALL_TIMEOUT_MS;
   const pollUntilTerminal = async (): Promise<CloudRunState> => {
     while (Date.now() < deadline) {
-      if (opts.signal?.aborted) return { ...state, note: "Cancelled" };
+      if (opts.signal?.aborted) return { ...state, phase: "cancelled", note: "Cancelled by you." };
       const st = await api.simulate.status({ runId: enq.runId });
       const phase = terminalFrom(st.status);
       push({

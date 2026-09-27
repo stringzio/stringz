@@ -247,3 +247,16 @@ Residual risk, accepted for the PoC and closed in Phase 4:
 - Runner diagnostics go to stderr only; stdout stays machine-parseable NDJSON.
 - Compiled user workflows run as WASM inside the CRE sandbox, which itself runs inside the Cloud Run gVisor microVM; the workload runs as the `bun` user (egress-init drops root immediately after the metadata hostname pin).
 - Project archives come from signed URLs or local files; treat archive contents as untrusted input, same as any uploaded build artifact.
+
+## Kill switch and task timeout (Phase 4 Slice 4B)
+
+- `SIM_TIMEOUT` (default 150s) SIGKILLs the CLI mid-run; entry.sh always kills
+  the whole process group, so the tailer dies with it.
+- The job carries a Cloud Run task timeout as the backstop for a hung
+  entry.sh itself: `gcloud run jobs update sim-runner --task-timeout=600s
+  --region=us-central1` (600s = build + simulate headroom over SIM_TIMEOUT).
+- The API can also kill on demand: dispatch resolves the run's Cloud Run
+  execution (matched by the RUN_ID container-env override, race-free) and
+  stores it on the run row; `simulate.cancel` and the 15-minute stale sweep
+  both call CancelExecution on it. A cancelled execution lands as
+  Completed=False, reason=Cancelled.
