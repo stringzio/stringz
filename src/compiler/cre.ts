@@ -396,6 +396,98 @@ ${emitOutputsWrite(n, [["pageId", `resolveLeaf(resolvePath(${v}Res.body, "id"))`
 }
 
 /** Dispatcher for the hosted-only modules in the cloud-sim target. */
+// ── Phase 4 Slice 4E: SSRF guards ────────────────────────────────────────────
+//
+// Layered with the VPC egress firewall (the network half of 4E, applied at
+// the infra level): the compiler rejects literal IPs in loopback/private/
+// link-local/metadata ranges for every endpoint it can see (swap/CCIP
+// endpoints, non-templated HTTP Request URLs), and the emitted workflow
+// re-checks at run time for URLs that only exist at run time (webhook and
+// bot URLs delivered as run secrets, templated URLs). Hostnames that RESOLVE
+// to private addresses (DNS rebinding) are the firewall's job, not the
+// compiler's.
+
+function ipv4InBlockedRange_(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const oct = m.slice(1).map(Number);
+  if (oct.some((o) => o > 255)) return false;
+  const addr = ((oct[0] * 256 + oct[1]) * 256 + oct[2]) * 256 + oct[3];
+  const inRange = (base: number, bits: number) => Math.floor(addr / 2 ** (32 - bits)) === Math.floor(base / 2 ** (32 - bits));
+  return (
+    inRange(0x0a000000, 8) || // 10.0.0.0/8
+    inRange(0xac100000, 12) || // 172.16.0.0/12
+    inRange(0xc0a80000, 16) || // 192.168.0.0/16
+    inRange(0x7f000000, 8) || // 127.0.0.0/8
+    inRange(0xa9fe0000, 16) || // 169.254.0.0/16 (link-local + GCE metadata 169.254.169.254)
+    inRange(0x00000000, 8) // 0.0.0.0/8
+  );
+}
+
+function blockedLiteralHost_(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "0.0.0.0" || h === "::" || h === "::1") return true;
+  if (h.includes(":")) {
+    return h.startsWith("fc") || h.startsWith("fd") || /^fe[89ab]/.test(h);
+  }
+  return ipv4InBlockedRange_(h);
+}
+
+/** Compile-time half of the SSRF guard: reject literal private/loopback/
+ *  link-local/metadata IPs in endpoints the compiler can see. Throws
+ *  BlueprintError on a bad URL or a blocked host. */
+function assertPublicEndpoint(rawUrl: string, label: string): void {
+  let host: string;
+  try {
+    host = new URL(rawUrl).hostname;
+  } catch {
+    throw new BlueprintError(`${label}: "${rawUrl}" is not a valid URL.`, "MISSING_PARAMS");
+  }
+  if (host && blockedLiteralHost_(host)) {
+    throw new BlueprintError(
+      `${label}: ${host} is a loopback, private, link-local, or metadata address - use a public hostname. ` +
+        "DNS-rebinding to private addresses is blocked at the network layer.",
+      "MISSING_PARAMS",
+    );
+  }
+}
+
+/** Run-time guard emitted into the workflow for URLs that only exist at run
+ *  time (webhook/bot URLs from run secrets, templated request URLs). Parses
+ *  the host manually - no URL global dependency inside the javy sandbox. */
+const RUNTIME_URL_GUARD = `
+function urlHost_(raw: string): string {
+  const m = /^[a-zA-Z][a-zA-Z0-9+.-]*:\\/\\/([^/?#]+)/.exec(raw.trim())
+  if (!m) return ""
+  const hostport = m[1]
+  if (hostport.startsWith("[")) {
+    const end = hostport.indexOf("]")
+    return end > 0 ? hostport.slice(1, end) : ""
+  }
+  const colon = hostport.indexOf(":")
+  return colon >= 0 ? hostport.slice(0, colon) : hostport
+}
+
+function assertPublicUrl_(url: string): void {
+  const h = urlHost_(url).toLowerCase()
+  let blocked = h === "localhost" || h === "0.0.0.0" || h === "::" || h === "::1"
+  if (h.includes(":")) {
+    blocked = blocked || h.startsWith("fc") || h.startsWith("fd") || /^fe[89ab]/.test(h)
+  } else {
+    const m = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(h)
+    if (m) {
+      const o = m.slice(1).map(Number)
+      if (o.some((x) => x > 255)) blocked = true
+      const a = ((o[0] * 256 + o[1]) * 256 + o[2]) * 256 + o[3]
+      const inRange = (base: number, bits: number) => Math.floor(a / 2 ** (32 - bits)) === Math.floor(base / 2 ** (32 - bits))
+      blocked = blocked || inRange(0x0a000000, 8) || inRange(0xac100000, 12) || inRange(0xc0a80000, 16) ||
+        inRange(0x7f000000, 8) || inRange(0xa9fe0000, 16) || inRange(0, 8)
+    }
+  }
+  if (blocked) throw new Error("blocked private/loopback/link-local/metadata URL: " + (h || url.slice(0, 80)))
+}
+`;
+
 function emitHostedCloudSimStep(n: BlueprintNode, v: string): string {
   switch (n.module) {
     case "chatgpt":
@@ -643,8 +735,15 @@ ${emitOutputsWrite(n, [["action", JSON.stringify(n.action)], ["result", v], ["ma
         else if (scheme === "Custom header") lines.push(`  ${v}Headers[${JSON.stringify(p.authHeader || "Authorization")}] = ${v}Token`);
         else lines.push(`  ${v}Headers["authorization"] = "Bearer " + ${v}Token`);
       }
+      // Phase 4 Slice 4E: literal-IP endpoints are rejected at compile time
+      // (below); templated URLs get the run-time guard instead.
+      const rawUrl = p.url ?? "";
+      if (rawUrl && !rawUrl.includes("{{")) assertPublicEndpoint(rawUrl, `HTTP Request (${n.id})`);
+      const target = `resolveTemplate(outputs, ${JSON.stringify(rawUrl)})`;
       lines.push(
-        `  const ${v}Res = httpRequest(runtime, resolveTemplate(outputs, ${JSON.stringify(p.url ?? "")}), ${JSON.stringify(method)}, ${v}Headers, resolveTemplate(outputs, ${JSON.stringify(p.body ?? "")}))`,
+        `  const ${v}Target = ${target}`,
+        `  assertPublicUrl_(${v}Target)`,
+        `  const ${v}Res = httpRequest(runtime, ${v}Target, ${JSON.stringify(method)}, ${v}Headers, resolveTemplate(outputs, ${JSON.stringify(p.body ?? "")}))`,
         emitOutputsWrite(n, [["status", `String(${v}Res.status)`], ["body", `${v}Res.body`]]),
         `  result.push(${v}Res.body.slice(0, 200))`,
       );
@@ -690,6 +789,7 @@ ${emitOutputsWrite(n, [["action", JSON.stringify(n.action)], ["result", v], ["ma
         const method = (p.method ?? "POST").toUpperCase();
         const requestBody = method === "GET" ? `""` : `resolveTemplate(outputs, ${JSON.stringify(p.body ?? "")})`;
         body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
+  assertPublicUrl_(${v}Url)
   const ${v}Res = httpRequest(runtime, ${v}Url, ${JSON.stringify(method)}, {}, ${requestBody})
   runtime.log("${n.id}: webhook " + ${v}Res.status + " via ${method}")
 ${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.status)`], ["body", `${v}Res.body`]])}`;
@@ -700,6 +800,7 @@ ${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.statu
       const fallbackBody = `JSON.stringify({ text: "Stringz: webhooks - ${n.action}. " + result.join(" | "), params: ${JSON.stringify(payloadFor(n))} })`;
       const requestBody = p.body ? `resolveTemplate(outputs, ${JSON.stringify(p.body)})` : fallbackBody;
       body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
+  assertPublicUrl_(${v}Url)
   const ${v}Res = httpRequest(runtime, ${v}Url, "POST", {}, ${requestBody})
   runtime.log("${n.id}: webhook posted")
 ${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.status)`], ["body", `${v}Res.body`]])}`;
@@ -714,6 +815,7 @@ ${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.statu
       }
       const secret = secretIdFor(n) ?? "SLACK_WEBHOOK_URL";
       body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
+  assertPublicUrl_(${v}Url)
   const ${v}Message = resolveTemplate(outputs, ${JSON.stringify(p.message ?? "")})
   const ${v}Channel = resolveTemplate(outputs, ${JSON.stringify(p.channel ?? "")}).trim()
   httpText(runtime, ${v}Url, "POST", {}, JSON.stringify({ text: ${v}Message, ...(${v}Channel ? { channel: ${v}Channel } : {}) }))
@@ -730,6 +832,7 @@ ${emitOutputsWrite(n, [["ok", `"true"`], ["channel", `${v}Channel`], ["message",
       }
       const secret = secretIdFor(n) ?? "DISCORD_WEBHOOK_URL";
       body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
+  assertPublicUrl_(${v}Url)
   const ${v}Message = resolveTemplate(outputs, ${JSON.stringify(p.message ?? "")})
   const ${v}Username = resolveTemplate(outputs, ${JSON.stringify(p.username ?? "")}).trim()
   httpText(runtime, ${v}Url, "POST", {}, JSON.stringify({ content: ${v}Message, ...(${v}Username ? { username: ${v}Username } : {}) }))
@@ -1060,7 +1163,7 @@ function testCondition(input: string, operator: string, value: string): boolean 
   if (operator === "equals") return input === value
   return input !== value
 }
-
+${RUNTIME_URL_GUARD}
 /** Walk a dotted path, parsing a JSON string when a path descends into it (twin of src/lib/templateRefs.resolvePath). */
 const resolvePath = (root: unknown, path: string): unknown => {
   let cur: unknown = root
@@ -1144,8 +1247,14 @@ function emitConfig(bp: Blueprint, schedule: string): string {
         throw new BlueprintError(`${label}: unknown action "${n.action}".`, "UNSUPPORTED_MODULE");
       }
     }
-    if (n.module === "swap" && !swapQuoteUrl) swapQuoteUrl = p.endpoint?.trim() ?? "";
-    if (n.module === "ccip" && !ccipUrl) ccipUrl = p.endpoint?.trim() ?? "";
+    if (n.module === "swap" && !swapQuoteUrl) {
+      swapQuoteUrl = p.endpoint?.trim() ?? "";
+      if (swapQuoteUrl) assertPublicEndpoint(swapQuoteUrl, `Swap (${n.id})`);
+    }
+    if (n.module === "ccip" && !ccipUrl) {
+      ccipUrl = p.endpoint?.trim() ?? "";
+      if (ccipUrl) assertPublicEndpoint(ccipUrl, `CCIP (${n.id})`);
+    }
   }
   return JSON.stringify(
     { schedule, thresholds, contracts, swapQuoteUrl, ccipUrl },
