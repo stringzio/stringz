@@ -1,23 +1,23 @@
 import { Check, Sparkles } from "lucide-react";
 import Sheet from "./Sheet";
+import { PLANS, usd } from "../lib/pricing";
 
 const COMMUNITY = [
-  "Everything in the open-source repo",
+  "50 cloud simulations per month",
   "Unlimited local flows and simulation",
-  "Deploy to CRE under your own keys",
+  "Export and self-host free forever",
 ];
 const PRO = [
-  "250 saved flows (hosted, autosave, backups)",
-  "Managed secrets vault (encrypted, per workspace)",
-  "Flow monitoring and alerts",
-  "3 team seats with shared flows",
+  "1,000 cloud simulations per month",
+  "Hosted builder with autosave and backups",
+  "Ephemeral run secrets, destroyed at run end",
   "Priority support",
 ];
 
 /**
  * Pro upgrade prompt. Shown when a Community user hits a Pro-gated feature:
- * they can see exactly what Pro adds, but checkout stays honest - billing is
- * not live yet, so the CTA says "Coming soon" instead of charging anyone.
+ * they can see exactly what Pro adds. Checkout wires in the next slice - the
+ * CTA stays honest until then.
  */
 export default function ProSheet({
   open,
@@ -29,11 +29,12 @@ export default function ProSheet({
   /** What the user tried to do, e.g. "Save more than 3 flows". */
   feature?: string;
 }) {
+  const pro = PLANS.find((p) => p.tier === "pro");
   return (
     <Sheet open={open} onClose={onClose} title="Pro">
       {feature && (
         <p className="mb-4 rounded-2xl bg-[#FDF3E3] px-4 py-3 text-[12.5px] font-medium leading-snug text-[#7a5a22]">
-          {feature} is a Pro feature.
+          {feature}
         </p>
       )}
 
@@ -56,7 +57,9 @@ export default function ProSheet({
           <span className="flex items-center gap-1.5 text-[14px] font-bold text-white">
             <Sparkles size={14} className="text-[#E8A33D]" /> Pro
           </span>
-          <span className="rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-bold text-white/70">$29/mo</span>
+          <span className="rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-bold text-white/70">
+            {usd(pro?.monthlyCents ?? 1900)}/mo · {usd(pro?.annualCents ?? 19000)}/yr
+          </span>
         </div>
         <ul className="mt-2.5 space-y-1.5">
           {PRO.map((f) => (
@@ -69,7 +72,7 @@ export default function ProSheet({
           disabled
           className="mt-4 w-full cursor-not-allowed rounded-full bg-white/10 py-3 text-[13px] font-bold text-white/50"
         >
-          Coming soon - billing is not live yet
+          Pay with USDC - going live this week
         </button>
       </div>
 

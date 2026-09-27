@@ -14,6 +14,7 @@ import LogoMark from "../components/LogoMark";
 import { SERVICES } from "../data/services";
 import { api } from "../lib/api";
 import Toast, { type ToastData } from "../components/Toast";
+import { PLANS, FEATURE_ROWS, usd } from "../lib/pricing";
 
 /* ---------------- helpers ---------------- */
 
@@ -532,198 +533,112 @@ function Steps() {
 /* ---------------- pricing ---------------- */
 
 function Pricing() {
-  const [yearly, setYearly] = useState(true);
-  const plans = [
-    {
-      name: "Community",
-      tag: "Self-hosted, free forever",
-      price: 0,
-      cta: "Start building",
-      dark: false,
-      features: [
-        "Everything in the open-source repo",
-        "Unlimited local flows and simulation",
-        "Deploy to CRE under your own keys",
-        "Community templates",
-        "Discord support",
-      ],
-    },
-    {
-      name: "Pro",
-      tag: "The hosted cloud, for traders and teams",
-      price: yearly ? 259 : 29,
-      cta: "Get started",
-      dark: true,
-      features: [
-        "Everything in Community",
-        "Hosted builder with autosave and backups",
-        "Managed secrets vault (encrypted, per-workspace)",
-        "Flow monitoring and alerts",
-        "3 team seats with shared flows",
-        "Priority support",
-      ],
-    },
-    {
-      name: "Enterprise",
-      tag: "For protocols and funds",
-      price: null,
-      cta: "Talk to us",
-      dark: false,
-      features: [
-        "Everything in Pro",
-        "SSO, roles and audit log",
-        "Custom retention and policies",
-        "Dedicated support with SLA",
-        "CRE application guidance",
-      ],
-    },
-  ];
+  const [yearly, setYearly] = useState(false);
+  const accent: Record<string, string> = {
+    community: "bg-[#E8A382]",
+    pro: "bg-[#A8BCC8]",
+    team: "bg-[#B5C9A8]",
+  };
   return (
     <section id="pricing" className="mx-auto mt-28 max-w-6xl px-6">
-      <motion.h2
-        {...fadeUp()}
-        className="text-center text-[38px] font-semibold tracking-tight text-[#171717]"
-      >
-        Simple transparent pricing
-      </motion.h2>
-      <motion.p
-        {...fadeUp(0.08)}
-        className="mx-auto mt-4 max-w-md text-center text-[13.5px] leading-relaxed text-[#6d6d66]"
-      >
-        Open core, like Supabase: the builder is open source and self-hosting is
-        free forever. Pro features run in the cloud we operate - that is how the
-        open core gets funded.
-      </motion.p>
-      <div className="mt-6 flex items-center justify-center gap-3 text-[13px] font-semibold text-[#171717]">
-        Monthly
-        <button
-          onClick={() => setYearly((y) => !y)}
-          className={`h-7 w-12 rounded-full p-1 transition ${yearly ? "bg-[#3F6B4F]" : "bg-gray-300"}`}
-          aria-label="Toggle yearly pricing"
+      <div className="rounded-[36px] bg-[#151B17] px-6 py-14 md:px-12">
+        <motion.h2
+          {...fadeUp()}
+          className="text-center text-[42px] font-semibold tracking-tight text-white"
         >
-          <div
-            className={`h-5 w-5 rounded-full bg-white shadow transition-transform ${yearly ? "translate-x-5" : ""}`}
-          />
-        </button>
-        Yearly{" "}
-        <span className="text-[11px] font-bold text-[#3F6B4F]">
-          (GET 25% OFF)
-        </span>
-      </div>
-      <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-        {plans.map((p, i) => (
-          <motion.div
-            key={p.name}
-            {...fadeUp(i * 0.08)}
-            className={`rounded-[28px] p-7 ring-1 ring-black/5 ${
-              p.dark
-                ? "bg-gradient-to-b from-[#1c241f] to-[#171717] text-white"
-                : "bg-white text-[#171717] shadow-sm"
-            }`}
+          Simple <span className="text-white/40">pricing</span>
+        </motion.h2>
+        <motion.p
+          {...fadeUp(0.08)}
+          className="mx-auto mt-4 max-w-md text-center text-[13.5px] leading-relaxed text-white/50"
+        >
+          Open core, like Supabase: the builder is open source and self-hosting is
+          free forever. Paid plans fund the cloud we operate - and the free tier
+          still includes cloud simulations every month.
+        </motion.p>
+
+        <div className="mt-6 flex items-center justify-center gap-3 text-[13px] font-semibold text-white/80">
+          Monthly
+          <button
+            onClick={() => setYearly((y) => !y)}
+            className={`h-7 w-12 rounded-full p-1 transition ${yearly ? "bg-[#B9D3A8]" : "bg-white/20"}`}
+            aria-label="Toggle yearly pricing"
           >
-            <h3 className="text-[17px] font-semibold tracking-tight">
-              {p.name}
-            </h3>
-            <p
-              className={`mt-1 text-[12px] ${p.dark ? "text-white/50" : "text-[#8a8a83]"}`}
-            >
-              {p.tag}
-            </p>
-            <div className="mt-5 flex items-baseline gap-1.5">
-              <span
-                className={`text-[38px] font-semibold tracking-tight ${p.dark ? "text-[#B9D3A8]" : ""}`}
-              >
-                {p.price === null ? "Custom" : `$${p.price}.00`}
-              </span>
-              {p.price !== null && (
-                <span
-                  className={`text-[12px] ${p.dark ? "text-white/50" : "text-[#8a8a83]"}`}
-                >
-                  / {yearly ? "yearly" : "monthly"}
-                </span>
-              )}
-            </div>
-            <Link
-              to="/waitlist"
-              className={`mt-5 block rounded-full py-3 text-center text-[13.5px] font-bold transition hover:scale-[1.02] active:scale-95 ${
-                p.dark
-                  ? "bg-[#B9D3A8] text-[#171717]"
-                  : "bg-[#171717] text-white"
-              }`}
-            >
-              {p.cta}
-            </Link>
-            <ul className="mt-6 space-y-3">
-              {p.features.map((f) => (
-                <li
-                  key={f}
-                  className={`flex items-center gap-2.5 text-[12.5px] font-medium ${p.dark ? "text-white/80" : "text-[#4c4c47]"}`}
-                >
-                  <Check
-                    size={14}
-                    className={p.dark ? "text-[#B9D3A8]" : "text-[#3F6B4F]"}
-                    strokeWidth={3}
-                  />{" "}
-                  {f}
-                </li>
-              ))}
-            </ul>
-          </motion.div>
-        ))}
-      </div>
-
-      {/* open-core notes */}
-      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-        <motion.div
-          {...fadeUp(0.1)}
-          className="rounded-[24px] bg-white p-6 shadow-sm ring-1 ring-black/5"
-        >
-          <h3 className="text-[15px] font-semibold text-[#171717]">
-            Self-hosting? It stays free.
-          </h3>
-          <p className="mt-2 text-[12.5px] leading-relaxed text-[#6d6d66]">
-            The Community edition is the full open-source core: clone it, run
-            it, extend it. Pro features (managed vault, monitoring, teams) are
-            cloud-only by design - the hosted service funds development, the way
-            Supabase funds Postgres.
-          </p>
-        </motion.div>
-        <motion.div
-          {...fadeUp(0.16)}
-          className="rounded-[24px] bg-white p-6 shadow-sm ring-1 ring-black/5"
-        >
-          <h3 className="text-[15px] font-semibold text-[#171717]">
-            Where do my keys live?
-          </h3>
-          <p className="mt-2 text-[12.5px] leading-relaxed text-[#6d6d66]">
-            Cloud: your webhook URLs and API tokens sit in an encrypted vault
-            (GCP Secret Manager), isolated per workspace, encrypted at rest -
-            never in our database or logs. Self-host: your own .env. Either way,
-            Stringz never asks for a private key; your CRE signer key stays with
-            your CRE account, not with us.
-          </p>
-        </motion.div>
-      </div>
-
-      <motion.div
-        {...fadeUp(0.1)}
-        className="mt-8 flex flex-col items-center justify-between gap-4 rounded-[24px] bg-[#171717] px-8 py-6 md:flex-row"
-      >
-        <div>
-          <h3 className="text-[18px] font-semibold text-white">
-            Need a custom automation setup?
-          </h3>
-          <p className="mt-1 text-[12.5px] text-white/50">
-            We tailor plans to match your protocol's complexity and scale.
-          </p>
+            <div
+              className={`h-5 w-5 rounded-full bg-[#151B17] transition-transform ${yearly ? "translate-x-5" : ""}`}
+            />
+          </button>
+          Yearly <span className="text-[11px] font-bold text-[#B9D3A8]">(2 MONTHS FREE)</span>
         </div>
-        <Link
-          to="/waitlist"
-          className="rounded-full bg-white px-6 py-3 text-[13px] font-bold text-[#171717] transition hover:scale-[1.03] active:scale-95"
-        >
-          Contact us
-        </Link>
-      </motion.div>
+
+        <div className="mt-10 grid grid-cols-1 gap-5 md:grid-cols-3">
+          {PLANS.map((p, i) => {
+            const price = yearly ? p.annualCents : p.monthlyCents;
+            return (
+              <motion.div
+                key={p.tier}
+                {...fadeUp(i * 0.08)}
+                className={`relative flex flex-col rounded-[28px] p-7 ${accent[p.tier]} text-[#171717]`}
+              >
+                {p.tier === "pro" && (
+                  <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-[#151B17] px-4 py-1.5 text-[10.5px] font-bold tracking-wide text-white">
+                    MOST POPULAR
+                  </span>
+                )}
+                <h3 className="text-[18px] font-bold tracking-tight">{p.name}</h3>
+                <p className="mt-1 text-[12.5px] font-medium text-black/60">{p.tag}</p>
+                <div className="mt-5 flex items-baseline gap-1.5">
+                  <span className="text-[40px] font-semibold tracking-tight">
+                    {usd(price)}
+                  </span>
+                  {price > 0 && <span className="text-[12px] font-medium text-black/50">/ {yearly ? "yearly" : "monthly"}</span>}
+                </div>
+                <Link
+                  to="/auth"
+                  className="mt-5 block rounded-full bg-[#151B17] py-3.5 text-center text-[13.5px] font-bold text-white transition hover:scale-[1.02] active:scale-95"
+                >
+                  {p.cta}
+                </Link>
+                <p className="mt-4 text-[12px] font-semibold text-black/70">
+                  {p.monthlySims.toLocaleString("en-US")} cloud simulations / month
+                </p>
+              </motion.div>
+            );
+          })}
+        </div>
+
+        {/* comparison table */}
+        <motion.div {...fadeUp(0.1)} className="mt-12">
+          <h3 className="text-[16px] font-semibold text-white">Key features</h3>
+          <div className="mt-4 overflow-hidden rounded-[20px] ring-1 ring-white/10">
+            {FEATURE_ROWS.map((row, i) => (
+              <div
+                key={row.label}
+                className={`grid grid-cols-4 items-center gap-2 px-5 py-3.5 text-[12.5px] ${i % 2 === 0 ? "bg-white/[0.04]" : "bg-transparent"}`}
+              >
+                <span className="col-span-1 font-semibold text-white/70">{row.label}</span>
+                {(["community", "pro", "team"] as const).map((tier) => (
+                  <span key={tier} className="flex justify-center">
+                    {row.values[tier] === "check" ? (
+                      <Check size={15} strokeWidth={3} className="text-[#B9D3A8]" />
+                    ) : row.values[tier] === null ? (
+                      <span className="text-white/25">-</span>
+                    ) : (
+                      <span className="font-bold text-white/85">{row.values[tier]}</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </motion.div>
+
+        <motion.p {...fadeUp(0.12)} className="mt-8 text-center text-[11.5px] leading-relaxed text-white/40">
+          Paid in USDC or USDT on Base, Arbitrum, Avalanche, or Ethereum - 30-day and annual
+          access, self-custody, cancel by simply not renewing. Self-hosting the open-source
+          builder stays free forever, on every plan.
+        </motion.p>
+      </div>
     </section>
   );
 }
@@ -971,7 +886,7 @@ function Footer() {
 /* ---------------- page ---------------- */
 
 // Pricing is temporarily hidden pre-launch; flip to true to restore the section.
-const SHOW_PRICING = false;
+const SHOW_PRICING = true;
 // Testimonials are placeholder copy today. Flip to true once we have real
 // user feedback to show.
 const SHOW_TESTIMONIALS = false;

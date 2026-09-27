@@ -175,6 +175,15 @@ export const simulateCancelResponseSchema = z.object({
 });
 export type SimulateCancelResponse = z.infer<typeof simulateCancelResponseSchema>;
 
+export const billingEntitlementsSchema = z.object({
+  tier: z.enum(["community", "pro", "team"]),
+  monthlySimLimit: z.number(),
+  paidThrough: z.string().nullable(),
+  simsUsed30d: z.number(),
+  simsRemaining: z.number(),
+});
+export type BillingEntitlements = z.infer<typeof billingEntitlementsSchema>;
+
 export const simulateRunSchema = z.object({
   id: z.string(),
   flowId: z.string().nullable(),
