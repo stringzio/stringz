@@ -201,6 +201,17 @@ const port = Number(process.env.SERVER_PORT ?? 8787);
 // fallback serves index.html for client-side routes (/app, /auth, ...).
 if (process.env.STATIC_DIR) {
   const { serveStatic } = await import("@hono/node-server/serve-static");
+  // Cache policy: hashed assets are content-addressed and cacheable forever;
+  // index.html must always revalidate, otherwise browsers heuristically cache
+  // it and keep serving a stale app (old chunk names) after every deploy.
+  app.use("/assets/*", async (c, next) => {
+    c.header("Cache-Control", "public, max-age=31536000, immutable");
+    await next();
+  });
+  app.use("/*", async (c, next) => {
+    c.header("Cache-Control", "no-cache");
+    await next();
+  });
   app.use("/assets/*", serveStatic({ root: process.env.STATIC_DIR }));
   // Top-level public files (favicon.svg, robots.txt, og images, ...). serveStatic
   // calls next() when no file matches, so client routes still reach the SPA
