@@ -325,7 +325,7 @@ export const appRouter = router({
         // Phase 3: ephemeral secrets persist to a run-scoped GCS object
         // (never the DB) BEFORE the task can dispatch.
         if (input.secrets) await writeRunSecrets(runId, input.secrets);
-        await enqueueTask(runId);
+        await enqueueTask(runId, input.triggerInput);
       } catch (err) {
         await db.delete(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId));
         void deleteRunSecrets(runId);

@@ -156,8 +156,10 @@ export async function deleteRunSecrets(runId: string): Promise<void> {
   }
 }
 
-/** Push a dispatch task onto the queue. Returns the created task name. */
-export async function enqueueTask(runId: string): Promise<string> {
+/** Push a dispatch task onto the queue. Returns the created task name.
+ *  Trigger inputs ride the task body (they are not secret and stay small);
+ *  dispatch forwards them to the runner as CLI flags. */
+export async function enqueueTask(runId: string, triggerInput?: { httpPayload?: string; evmTxHash?: string }): Promise<string> {
   assertCloudSimEnabled();
   const audience = `${appUrl()}/sim-dispatch`;
   const client = getTasks();
@@ -168,7 +170,7 @@ export async function enqueueTask(runId: string): Promise<string> {
         httpMethod: "POST",
         url: audience,
         headers: { "Content-Type": "application/json" },
-        body: Buffer.from(JSON.stringify({ runId })).toString("base64"),
+        body: Buffer.from(JSON.stringify({ runId, ...triggerInput })).toString("base64"),
         // The Cloud Tasks API requires an explicit SA email here (it does NOT
         // default to the caller's identity). It must be an SA the Cloud Tasks
         // service agent can impersonate - flowkit-api-run was granted that.
@@ -185,8 +187,9 @@ export async function enqueueTask(runId: string): Promise<string> {
 
 export type DispatchOutcome = "not-found" | "not-queued" | "ok";
 
-/** Transition a queued run to running and kick the Cloud Run Job. */
-export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
+/** Transition a queued run to running and kick the Cloud Run Job. Trigger
+ *  inputs arrive on the dispatch request body (via the queue task). */
+export async function dispatchRun(runId: string, triggerInput?: { httpPayload?: string; evmTxHash?: string }): Promise<DispatchOutcome> {
   assertCloudSimEnabled();
   const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
   if (!row) return "not-found";
@@ -222,6 +225,10 @@ export async function dispatchRun(runId: string): Promise<DispatchOutcome> {
               // secrets until the lifecycle purge).
               { name: "SECRETS_URL", value: secretsUrl },
               { name: "SECRETS_DELETE_URL", value: secretsDeleteUrl },
+              // Phase 3 Slice 3B: trigger inputs for the CLI flags; the
+              // runner only adds the flags when set.
+              { name: "HTTP_PAYLOAD", value: triggerInput?.httpPayload ?? "" },
+              { name: "EVM_TX_HASH", value: triggerInput?.evmTxHash ?? "" },
             ],
           },
         ],
