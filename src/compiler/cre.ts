@@ -236,7 +236,198 @@ function emitOutputsWrite(n: BlueprintNode, entries: [string, string][]): string
   return `  outputs[${JSON.stringify(n.id)}] = { ${inner} }`;
 }
 
-function emitSpineStep(n: BlueprintNode, inBundleLoop = false): string {
+/**
+ * Compile target (Phase 3 Slice 3C). "export" is the user-downloadable CRE
+ * project - it keeps today's gate: hosted-only services throw
+ * `cloudRunnerError` because a locally-simulated project can never satisfy
+ * their API-key auth. "cloud-sim" is the Test-in-cloud target: those services
+ * emit REAL endpoint calls authorized by the run's ephemeral secrets, so a
+ * cloud run can execute every node type.
+ */
+export type CompileTarget = "export" | "cloud-sim";
+
+// ── Phase 3 Slice 3C: cloud-sim emitters for hosted-only services ───────────
+// These run ONLY in the "cloud-sim" compile target, where the run's ephemeral
+// secrets (the same runtime.getSecret contract as export) authorize real API
+// calls. Secret values never enter log lines, and the runner's redaction
+// scrubs them from every emitted line regardless.
+
+/** Compile a hosted-only step to a clear runtime error (still a compile
+ *  success in cloud-sim, so mixed flows run their other steps for real). */
+function emitCloudSimStub(n: BlueprintNode, reason: string): string {
+  const label = `${SERVICES[n.module as ServiceId]?.name ?? n.module} (${n.id})`;
+  return `  runtime.log(${JSON.stringify(`${n.id}: ${reason}`)})\n  throw new Error(${JSON.stringify(`${label}: ${reason}`)})`;
+}
+
+const AI_PROVIDER_SHAPE: Record<
+  string,
+  { url: string; auth: "bearer" | "x-api-key" | "query"; shape: "openai" | "anthropic" | "gemini"; extract: string }
+> = {
+  OpenAI: { url: "https://api.openai.com/v1/chat/completions", auth: "bearer", shape: "openai", extract: "choices.0.message.content" },
+  Kimi: { url: "https://api.moonshot.cn/v1/chat/completions", auth: "bearer", shape: "openai", extract: "choices.0.message.content" },
+  Anthropic: { url: "https://api.anthropic.com/v1/messages", auth: "x-api-key", shape: "anthropic", extract: "content.0.text" },
+  Gemini: { url: "", auth: "query", shape: "gemini", extract: "candidates.0.content.parts.0.text" },
+};
+
+function emitAiAgentStep(n: BlueprintNode, v: string): string {
+  const p = n.params ?? {};
+  const provider = p.provider ?? "OpenAI";
+  const cfg = AI_PROVIDER_SHAPE[provider] ?? AI_PROVIDER_SHAPE.OpenAI;
+  const secret = secretIdFor(n) ?? "OPENAI_API_KEY";
+  const model = p.model ?? "gpt-4o-mini";
+  const prompt =
+    n.action === "Summarize text"
+      ? `Summarize the following text as a ${p.summaryLength ?? "medium"} summary:\n\n${p.text ?? ""}`
+      : (p.prompt ?? "");
+  const url =
+    cfg.shape === "gemini"
+      ? `"https://generativelanguage.googleapis.com/v1beta/models/" + ${JSON.stringify(model)} + ":generateContent?key=" + ${v}Key`
+      : JSON.stringify(cfg.url);
+  const headers =
+    cfg.auth === "bearer"
+      ? `{ "Content-Type": "application/json", Authorization: "Bearer " + ${v}Key }`
+      : cfg.auth === "x-api-key"
+        ? `{ "Content-Type": "application/json", "x-api-key": ${v}Key, "anthropic-version": "2023-06-01" }`
+        : `{ "Content-Type": "application/json" }`;
+  const body =
+    cfg.shape === "openai"
+      ? `JSON.stringify({ model: ${JSON.stringify(model)}, messages: [{ role: "user", content: ${v}Prompt }] })`
+      : cfg.shape === "anthropic"
+        ? `JSON.stringify({ model: ${JSON.stringify(model)}, max_tokens: 1024, messages: [{ role: "user", content: ${v}Prompt }] })`
+        : `JSON.stringify({ contents: [{ parts: [{ text: ${v}Prompt }] }] })`;
+  return `  const ${v}Key = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
+  const ${v}Prompt = resolveTemplate(outputs, ${JSON.stringify(prompt)})
+  const ${v}Res = httpRequest(runtime, ${url}, "POST", ${headers}, ${body})
+  const ${v}Reply = resolveLeaf(resolvePath(${v}Res.body, ${JSON.stringify(cfg.extract)}))
+${emitOutputsWrite(n, [["reply", `${v}Reply`], ["provider", JSON.stringify(provider)], ["model", JSON.stringify(model)]])}
+  runtime.log(${JSON.stringify(`${n.id}: ai replied (${provider}) `)} + ${v}Reply.slice(0, 80))`;
+}
+
+function emitSlackBotStep(n: BlueprintNode, v: string): string {
+  const p = n.params ?? {};
+  const secret = secretIdFor(n) ?? "SLACK_BOT_TOKEN";
+  const token = `const ${v}Token = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value`;
+  const headers = `{ "Content-Type": "application/json", Authorization: "Bearer " + ${v}Token }`;
+  if (n.action === "Create a channel") {
+    return `  ${token}
+  const ${v}Res = httpRequest(runtime, "https://slack.com/api/conversations.create", "POST", ${headers}, JSON.stringify({ name: ${JSON.stringify(p.channelName ?? "")}, topic: ${JSON.stringify(p.topic ?? "")} }))
+  const ${v}Id = resolveLeaf(resolvePath(${v}Res.body, "channel.id"))
+${emitOutputsWrite(n, [["channelId", `${v}Id`], ["ok", `resolveLeaf(resolvePath(${v}Res.body, "ok"))`]])}
+  runtime.log(${JSON.stringify(`${n.id}: slack channel created `)} + ${v}Id)`;
+  }
+  // "Get a user" - Slack users.info needs an ID; username lookup is v0.1.
+  return `  ${token}
+  const ${v}User = ${JSON.stringify(p.user ?? "")}
+  if (!/^U[A-Z0-9]{2,}$/.test(${v}User)) throw new Error("Slack (${n.id}): pass a user ID (U0123ABC) - username lookup lands in v0.1")
+  const ${v}Res = httpRequest(runtime, "https://slack.com/api/users.info?user=" + ${v}User, "GET", ${headers}, "")
+${emitOutputsWrite(n, [["userId", `resolveLeaf(resolvePath(${v}Res.body, "user.id"))`], ["name", `resolveLeaf(resolvePath(${v}Res.body, "user.name"))`], ["ok", `resolveLeaf(resolvePath(${v}Res.body, "ok"))`]])}
+  runtime.log(${JSON.stringify(`${n.id}: slack user `)} + resolveLeaf(resolvePath(${v}Res.body, "user.name")))`;
+}
+
+function emitDiscordBotStep(n: BlueprintNode, v: string): string {
+  const p = n.params ?? {};
+  const secret = secretIdFor(n) ?? "DISCORD_BOT_TOKEN";
+  const token = `const ${v}Token = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value`;
+  const headers = `{ Authorization: "Bot " + ${v}Token }`;
+  if (n.action === "Get a message") {
+    return `  ${token}
+  const ${v}Res = httpRequest(runtime, "https://discord.com/api/v10/channels/${p.channelId ?? ""}/messages?limit=${encodeURIComponent(p.limit ?? "5")}", "GET", ${headers}, "")
+${emitOutputsWrite(n, [["messageId", `resolveLeaf(resolvePath(${v}Res.body, "0.id"))`], ["content", `resolveLeaf(resolvePath(${v}Res.body, "0.content"))`], ["author", `resolveLeaf(resolvePath(${v}Res.body, "0.author.username"))`]])}
+  runtime.log(${JSON.stringify(`${n.id}: discord message fetched `)} + resolveLeaf(resolvePath(${v}Res.body, "0.id")))`;
+  }
+  // "Add a role" - Discord member/role endpoints need numeric IDs.
+  return `  ${token}
+  const ${v}Guild = ${JSON.stringify(p.serverId ?? "")}
+  const ${v}User = ${JSON.stringify(p.user ?? "")}
+  const ${v}Role = ${JSON.stringify(p.role ?? "")}
+  if (!/^\\d{5,}$/.test(${v}Guild)) throw new Error("Discord (${n.id}): pass the numeric server ID for Add a role")
+  if (!/^\\d{5,}$/.test(${v}User) || !/^\\d{5,}$/.test(${v}Role)) throw new Error("Discord (${n.id}): pass numeric user and role IDs (right-click > Copy ID in Discord)")
+  const ${v}Res = httpRequest(runtime, "https://discord.com/api/v10/guilds/" + ${v}Guild + "/members/" + ${v}User + "/roles/" + ${v}Role, "PUT", ${headers}, "")
+${emitOutputsWrite(n, [["ok", `String(${v}Res.status >= 200 && ${v}Res.status < 300)`]])}
+  runtime.log(${JSON.stringify(`${n.id}: discord role add status `)} + String(${v}Res.status))`;
+}
+
+function emitXPostStep(n: BlueprintNode, v: string): string {
+  const p = n.params ?? {};
+  const secret = secretIdFor(n) ?? "X_API_BEARER_TOKEN";
+  const text = p.text ?? "";
+  const reply = p.replyToTweetId?.trim();
+  const replyEntry = reply ? `, reply: { in_reply_to_tweet_id: ${JSON.stringify(reply)} }` : "";
+  return `  const ${v}Token = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
+  const ${v}Text = resolveTemplate(outputs, ${JSON.stringify(text)})
+  const ${v}Res = httpRequest(runtime, "https://api.twitter.com/2/tweets", "POST", { "Content-Type": "application/json", Authorization: "Bearer " + ${v}Token }, JSON.stringify({ text: ${v}Text${replyEntry} }))
+${emitOutputsWrite(n, [["tweetId", `resolveLeaf(resolvePath(${v}Res.body, "data.id"))`], ["text", `${v}Text`]])}
+  runtime.log(${JSON.stringify(`${n.id}: tweet posted `)} + resolveLeaf(resolvePath(${v}Res.body, "data.id")))`;
+}
+
+function emitNotionStep(n: BlueprintNode, v: string): string {
+  const p = n.params ?? {};
+  const secret = secretIdFor(n) ?? "NOTION_API_KEY";
+  const token = `const ${v}Token = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value`;
+  const headers = `{ "Content-Type": "application/json", Authorization: "Bearer " + ${v}Token, "Notion-Version": "2022-06-28" }`;
+  if (n.action === "Create a page") {
+    const parent = p.parentType === "Page" ? { page_id: p.parentId ?? "" } : { database_id: p.parentId ?? "" };
+    const content = (p.content ?? "").trim();
+    const children = content
+      ? `, children: [{ object: "block", type: "paragraph", paragraph: { rich_text: [{ text: { content: resolveTemplate(outputs, ${JSON.stringify(content)}) } }] } }]`
+      : "";
+    const props =
+      p.parentType === "Page"
+        ? `{ title: { title: [{ text: { content: resolveTemplate(outputs, ${JSON.stringify(p.title ?? "")}) } }] } }`
+        : `{ "Name": { title: [{ text: { content: resolveTemplate(outputs, ${JSON.stringify(p.title ?? "")}) } }] } }`;
+    return `  ${token}
+  const ${v}Res = httpRequest(runtime, "https://api.notion.com/v1/pages", "POST", ${headers}, JSON.stringify({ parent: ${JSON.stringify(parent)}, properties: ${props}${children} }))
+${emitOutputsWrite(n, [["pageId", `resolveLeaf(resolvePath(${v}Res.body, "id"))`], ["url", `resolveLeaf(resolvePath(${v}Res.body, "url"))`]])}
+  runtime.log(${JSON.stringify(`${n.id}: notion page `)} + resolveLeaf(resolvePath(${v}Res.body, "id")))`;
+  }
+  if (n.action === "Search pages") {
+    const filterValue = p.filter === "Pages only" ? "page" : p.filter === "Databases only" ? "database" : "";
+    const filter = filterValue ? `, filter: { property: "object", value: ${JSON.stringify(filterValue)} }` : "";
+    return `  ${token}
+  const ${v}Res = httpRequest(runtime, "https://api.notion.com/v1/search", "POST", ${headers}, JSON.stringify({ query: ${JSON.stringify(p.query ?? "")}, sort: { direction: "descending", timestamp: ${JSON.stringify(p.sort === "Created" ? "created_time" : "last_edited_time")} }${filter} }))
+${emitOutputsWrite(n, [["results", `resolveLeaf(resolvePath(${v}Res.body, "results"))`], ["count", `resolveLeaf(resolvePath(${v}Res.body, "results.length"))`]])}
+  runtime.log(${JSON.stringify(`${n.id}: notion search `)} + resolveLeaf(resolvePath(${v}Res.body, "results.length")) + " results")`;
+  }
+  // "Update database": set one property (rich_text shape).
+  return `  ${token}
+  const ${v}Res = httpRequest(runtime, "https://api.notion.com/v1/pages/${encodeURIComponent(p.pageId ?? "")}", "PATCH", ${headers}, JSON.stringify({ properties: { [${JSON.stringify(p.property ?? "")}]: { rich_text: [{ text: { content: resolveTemplate(outputs, ${JSON.stringify(p.value ?? "")}) } }] } } }))
+${emitOutputsWrite(n, [["pageId", `resolveLeaf(resolvePath(${v}Res.body, "id"))`], ["ok", `String(${v}Res.status >= 200 && ${v}Res.status < 300)`]])}
+  runtime.log(${JSON.stringify(`${n.id}: notion row updated `)} + resolveLeaf(resolvePath(${v}Res.body, "id")))`;
+}
+
+/** Dispatcher for the hosted-only modules in the cloud-sim target. */
+function emitHostedCloudSimStep(n: BlueprintNode, v: string): string {
+  switch (n.module) {
+    case "chatgpt":
+      return n.action === "Edit an image"
+        ? emitCloudSimStub(n, "image edits differ per provider and land in v0.1")
+        : emitAiAgentStep(n, v);
+    case "notion":
+      return emitNotionStep(n, v);
+    case "x":
+      return n.action === "Post a tweet"
+        ? emitXPostStep(n, v)
+        : emitCloudSimStub(n, "watch/search are polling actions - they run once deployed on the DON");
+    case "slack":
+      return emitSlackBotStep(n, v);
+    case "discord":
+      return emitDiscordBotStep(n, v);
+    case "gmail":
+      return emitCloudSimStub(n, "needs an OAuth-connected account - Gmail connect lands in v0.1");
+    case "gdrive":
+    case "google-sheets":
+    case "calendar":
+      return emitCloudSimStub(n, "needs service-account JWT auth or OAuth connect - lands in v0.1");
+    case "youtube":
+      return emitCloudSimStub(n, "needs OAuth connect - lands in v0.1");
+    case "canva":
+      return emitCloudSimStub(n, "needs an OAuth-connected account - lands in v0.1");
+    default:
+      throw new BlueprintError(`Module "${n.module}" can't compile to CRE yet.`, "UNSUPPORTED_MODULE");
+  }
+}
+
+function emitSpineStep(n: BlueprintNode, inBundleLoop = false, target: CompileTarget = "export"): string {
   const chain = (n.chain ?? "ethereum") as FlowChain;
   const selector = CHAIN_SELECTORS[chain];
   const v = nodeVar(n);
@@ -515,9 +706,12 @@ ${emitOutputsWrite(n, [["delivered", `"true"`], ["status", `String(${v}Res.statu
       break;
     }
     case "slack": {
-      // Only "Send a message" posts to a Slack webhook URL; the other actions
-      // need a bot token and the hosted runner.
-      if (n.action !== "Send a message") throw cloudRunnerError(n.module, n.action);
+      // "Send a message" posts to a Slack webhook URL; bot-token actions hit
+      // the Slack Web API and are real calls in the cloud-sim target only.
+      if (n.action !== "Send a message") {
+        if (target === "cloud-sim") { body = emitSlackBotStep(n, v); break; }
+        throw cloudRunnerError(n.module, n.action);
+      }
       const secret = secretIdFor(n) ?? "SLACK_WEBHOOK_URL";
       body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
   const ${v}Message = resolveTemplate(outputs, ${JSON.stringify(p.message ?? "")})
@@ -528,9 +722,12 @@ ${emitOutputsWrite(n, [["ok", `"true"`], ["channel", `${v}Channel`], ["message",
       break;
     }
     case "discord": {
-      // Only "Post to channel" posts to a Discord webhook URL; the other
-      // actions need a bot token and the hosted runner.
-      if (n.action !== "Post to channel") throw cloudRunnerError(n.module, n.action);
+      // "Post to channel" posts to a Discord webhook URL; bot-token actions
+      // hit the Discord API and are real calls in the cloud-sim target only.
+      if (n.action !== "Post to channel") {
+        if (target === "cloud-sim") { body = emitDiscordBotStep(n, v); break; }
+        throw cloudRunnerError(n.module, n.action);
+      }
       const secret = secretIdFor(n) ?? "DISCORD_WEBHOOK_URL";
       body = `  const ${v}Url = runtime.getSecret({ id: ${JSON.stringify(secret)} }).result().value
   const ${v}Message = resolveTemplate(outputs, ${JSON.stringify(p.message ?? "")})
@@ -548,8 +745,14 @@ ${emitOutputsWrite(n, [["ok", `"true"`], ["message", `${v}Message`], ["username"
     case "notion":
     case "calendar":
     case "x":
-    case "google-sheets":
+    case "google-sheets": {
+      // Export target: these cannot authenticate outside the hosted runner.
+      // Cloud-sim target: real API calls authorized by the run's ephemeral
+      // secrets; services that still need OAuth connect emit a clear runtime
+      // error instead of failing at compile time.
+      if (target === "cloud-sim") { body = emitHostedCloudSimStep(n, v); break; }
       throw cloudRunnerError(n.module);
+    }
     case "variables": {
       const name = JSON.stringify(p.name ?? "");
       if (n.action === "Set variable") {
@@ -619,7 +822,7 @@ function emitLogFilterLines(n: BlueprintNode): string {
   return lines.join("\n") + "\n";
 }
 
-function emitMainTs(bp: Blueprint): string {
+function emitMainTs(bp: Blueprint, target: CompileTarget = "export"): string {
   const spineNodes = bp.nodes;
   // "Generate bundles" with count > 1 wraps the spine in a loop. The count is
   // capped regardless of user input; "Max runs" narrows the bound when lower
@@ -635,17 +838,17 @@ function emitMainTs(bp: Blueprint): string {
     // inside the loop; an entry node dragged ahead of it (sleep/evm-event)
     // stays outside and runs once, before the first bundle.
     const triggerIdx = spineNodes.findIndex((n) => n.id === bundleTrigger.id);
-    const before = spineNodes.slice(0, triggerIdx).map((n) => emitSpineStep(n)).join("\n\n");
+    const before = spineNodes.slice(0, triggerIdx).map((n) => emitSpineStep(n, false, target)).join("\n\n");
     const inside = indent(
       spineNodes
         .slice(triggerIdx)
-        .map((n) => emitSpineStep(n, n.id === bundleTrigger.id))
+        .map((n) => emitSpineStep(n, n.id === bundleTrigger.id, target))
         .join("\n\n"),
     );
     const loop = `  for (let bundleIndex = 1; bundleIndex <= ${bundleBound}; bundleIndex++) {\n${inside}\n  }`;
     body = before ? `${before}\n\n${loop}` : loop;
   } else {
-    body = spineNodes.map((n) => emitSpineStep(n)).join("\n\n");
+    body = spineNodes.map((n) => emitSpineStep(n, false, target)).join("\n\n");
   }
   const usesGuardrails = spineNodes.some((n) => guardrailsFor(n) !== null);
   const guardrailHelper = usesGuardrails
@@ -968,7 +1171,8 @@ function emitRpcs(bp: Blueprint): string {
 }
 
 /** Compile a blueprint into a complete CRE project: path -> file contents. */
-export function generateCreProject(bp: Blueprint): Record<string, string> {
+export function generateCreProject(bp: Blueprint, opts: { target?: CompileTarget } = {}): Record<string, string> {
+  const target = opts.target ?? "export";
   const flowSlug = slug(bp.meta.name);
   const wf = `${flowSlug}-workflow`;
   const schedule = flowSchedule(bp);
@@ -1021,7 +1225,7 @@ Deploying to a DON requires Chainlink approval - Stringz can't grant it.
 Stringz is tooling only - keys, funds, gas and secrets are always yours.
 `;
 
-  files[`${wf}/main.ts`] = emitMainTs(bp);
+  files[`${wf}/main.ts`] = emitMainTs(bp, target);
   files[`${wf}/config.staging.json`] = emitConfig(bp, schedule);
   files[`${wf}/config.production.json`] = emitConfig(bp, schedule);
   files[`${wf}/workflow.yaml`] = `# ${flowSlug}
