@@ -17,11 +17,14 @@ export interface Entitlements {
 }
 
 const activePaidEntitlement = async (userId: string): Promise<{ plan: string; paidThrough: string } | null> => {
+  // sp_entitlements stores paid_through as ISO text (stringz-pay's schema),
+  // so the recency check happens in JS - never compare text to now() in SQL.
   const rows = await db.execute(
-    sql`SELECT plan, paid_through FROM sp_entitlements WHERE user_id = ${userId} AND paid_through > now()`,
+    sql`SELECT plan, paid_through FROM sp_entitlements WHERE user_id = ${userId}`,
   );
   const row = rows.rows[0] as unknown as { plan: string; paid_through: string } | undefined;
-  return row ? { plan: row.plan, paidThrough: row.paid_through } : null;
+  if (!row || row.paid_through <= new Date().toISOString()) return null;
+  return { plan: row.plan, paidThrough: row.paid_through };
 };
 
 const simsUsedInLast30d = async (userId: string): Promise<number> => {
