@@ -571,7 +571,7 @@ export default function CanvasScreen({
     let tarball: Uint8Array;
     let required: string[];
     try {
-      const result = compileFlow(wfName, nodes, edges);
+      const result = compileFlow(wfName, nodes, edges, { target: "cloud-sim" });
       tarball = packTarGz(Object.entries(result.creFiles).map(([path, contents]) => ({ path, content: contents })));
       required = result.requiredSecrets;
     } catch (err) {
@@ -1856,7 +1856,7 @@ cd .. && cre workflow simulate ${flowSlug}-workflow --target staging-settings`}<
         requiredSecrets={cloudSecretsNeeded}
         onStart={(secrets) => {
           try {
-            const result = compileFlow(wfName, nodes, edges);
+            const result = compileFlow(wfName, nodes, edges, { target: "cloud-sim" });
             startCloudRun(
               packTarGz(Object.entries(result.creFiles).map(([path, content]) => ({ path, content }))),
               secrets,
