@@ -8,12 +8,13 @@ import Toast, { type ToastData } from "../components/Toast";
 import ProSheet from "../components/ProSheet";
 import { api } from "../lib/api";
 import type { PublicUser } from "../lib/contract";
+import type { Tier } from "../lib/pricing";
 
 const CHAIN_OPTIONS: Chain[] = ["ethereum", "base", "arbitrum", "optimism"];
 
 const PLAN_INCLUDES: Record<string, string[]> = {
-  community: ["Up to 3 saved flows", "Local and manual runs", "Community support"],
-  pro: ["250 saved flows", "Hosted cloud with autosave and backups", "Managed secrets vault, monitoring, 3 team seats", "Priority support"],
+  community: ["50 cloud simulations per month", "Unlimited local flows and simulation", "Export and self-host free forever"],
+  pro: ["1,000 cloud simulations per month", "Hosted builder with autosave and backups", "Ephemeral run secrets", "Priority support"],
 };
 
 const enter = (delay: number) => ({
@@ -29,15 +30,22 @@ export default function SettingsScreen({ desktop = false, onBack }: { desktop?: 
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [defaultChain, setDefaultChain] = useState<Chain>("ethereum");
   const [me, setMe] = useState<PublicUser | null>(null);
+  const [tier, setTier] = useState<Tier>("community");
+  const [paidThrough, setPaidThrough] = useState<string | null>(null);
   const { address, isConnected } = useAccount();
   const { disconnect } = useDisconnect();
   const { openConnectModal } = useConnectModal();
   const wallet = isConnected && address ? `${address.slice(0, 6)}…${address.slice(-4)}` : null;
-  const isPro = me?.plan === "pro" && me?.planStatus === "active";
+  const isPro = tier !== "community";
 
   useEffect(() => {
     let cancelled = false;
     api.auth.me().then((u) => !cancelled && setMe(u)).catch(() => {});
+    api.billing.entitlements().then((e) => {
+      if (cancelled) return;
+      setTier(e.tier);
+      setPaidThrough(e.paidThrough);
+    }).catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -218,7 +226,7 @@ export default function SettingsScreen({ desktop = false, onBack }: { desktop?: 
               <div>
                 <div className="text-[15px] font-bold text-[#1a1a1a]">{isPro ? "Pro" : "Community - $0"}</div>
                 <div className="text-[11.5px] text-gray-400">
-                  {isPro ? `Renews ${me?.planRenewalAt ? new Date(me.planRenewalAt).toLocaleDateString() : "monthly"}` : "Free forever"}
+                  {isPro ? `Active until ${paidThrough ? new Date(paidThrough).toLocaleDateString() : "-"}` : "Free forever"}
                 </div>
               </div>
               <span className="rounded-full bg-[#EAF2EA] px-3 py-1.5 text-[11px] font-bold text-[#3f6b4f]">Current plan</span>
@@ -236,12 +244,12 @@ export default function SettingsScreen({ desktop = false, onBack }: { desktop?: 
             >
               {isPro ? "Manage plan" : "Upgrade to Pro"}
             </button>
-            <button
-              onClick={() => showToast("Pricing opens when billing goes live")}
-              className="mt-2.5 w-full rounded-full bg-gray-100 py-3 text-[13px] font-semibold text-gray-600 transition active:scale-[0.98]"
+            <a
+              href="/#pricing"
+              className="mt-2.5 block rounded-full bg-gray-100 py-3 text-center text-[13px] font-semibold text-gray-600 transition active:scale-[0.98]"
             >
               View pricing
-            </button>
+            </a>
           </motion.div>
         </div>
 

@@ -212,7 +212,7 @@ export default function Waitlist() {
             {position !== null
               ? `${position.toLocaleString()} builders in line (including you)`
               : "Builders are lining up"}{" "}
-            · founding members get 25% off Pro, forever
+            · founding members get annual pricing locked at the launch rate
           </p>
         </div>
 

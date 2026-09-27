@@ -6,6 +6,7 @@ import { and, eq, gt, sql } from "drizzle-orm";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { db, pool, schema } from "./db/client";
 import { scrubSecretValues } from "./scrub";
+import { TIER_SIM_LIMITS, type Tier } from "../../src/lib/pricing";
 
 /**
  * Cloud simulation orchestration. A run's life:
@@ -45,12 +46,10 @@ const intFromEnv = (v: string | undefined, dflt: number): number => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
 };
 
-/** Max runs a user may start per rolling 24h window. */
-export const RATE_LIMIT_MAX_RUNS_24H = intFromEnv(process.env.SIM_RATE_MAX_RUNS_24H, 50);
 /** Max runs a user may have queued + running at once. */
 export const RATE_LIMIT_MAX_INFLIGHT = intFromEnv(process.env.SIM_RATE_MAX_INFLIGHT, 3);
-/** Rolling window for the runs cap. */
-export const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Rolling window for the monthly runs quota. */
+export const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000 * 30;
 
 // ── Phase 4 Slice 4C: payload + log caps ─────────────────────────────────────
 //
@@ -120,16 +119,25 @@ async function secretValuesForRun(runId: string): Promise<string[]> {
  *  over budget. A per-user advisory xact lock serializes concurrent enqueues
  *  so two simultaneous requests cannot both pass the counts (READ COMMITTED
  *  alone would let both snapshot the same count). The lock is transactional,
- *  so it releases with the insert commit or rollback. */
-export async function assertRateLimits(userId: string): Promise<void> {
+ *  so it releases with the insert commit or rollback.
+ *
+ *  Phase 5 Slice 5C: the monthly quota is tier-based (Free 50 / Pro 1,000 /
+ *  Team 4,000 per rolling 30 days), from the same entitlements source the
+ *  billing surface shows. */
+export async function assertRateLimits(userId: string, tier: Tier): Promise<void> {
   await db.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
   const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
   const [recent] = await db
     .select({ count: sql<number>`count(*)` })
     .from(schema.simulationRuns)
     .where(sql`${schema.simulationRuns.userId} = ${userId} and ${schema.simulationRuns.createdAt} >= ${windowStart}`);
-  if ((recent?.count ?? 0) >= RATE_LIMIT_MAX_RUNS_24H) {
-    throw new Error(`Daily simulation limit reached (max ${RATE_LIMIT_MAX_RUNS_24H} runs per 24h) - try again later.`);
+  const monthlyLimit = TIER_SIM_LIMITS[tier];
+  if ((recent?.count ?? 0) >= monthlyLimit) {
+    throw new Error(
+      tier === "community"
+        ? `Free tier includes ${monthlyLimit} cloud simulations per 30 days - upgrade to Pro for 1,000, or export and self-host for unlimited.`
+        : `Your plan includes ${monthlyLimit.toLocaleString("en-US")} cloud simulations per 30 days - it resets as older runs age out.`,
+    );
   }
   const [inflight] = await db
     .select({ count: sql<number>`count(*)` })

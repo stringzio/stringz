@@ -13,6 +13,7 @@ import type {
   SimulateEnqueueResponse,
   SimulateCancelInput,
   SimulateCancelResponse,
+  BillingEntitlements,
   SimulateListResponse,
   SimulateRun,
   SiweVerifyInput,
@@ -68,6 +69,7 @@ export const api = {
   billing: {
     /** Hosted checkout URL for the configured rail; throws until keys exist. */
     checkout: () => call<{ url: string }>("billing.checkout", {}),
+    entitlements: () => call<BillingEntitlements>("billing.entitlements"),
   },
   onboarding: {
     submit: (input: OnboardingSubmitInput) => call<{ ok: boolean }>("onboarding.submit", input),

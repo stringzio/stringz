@@ -23,8 +23,10 @@ import {
   simulateListResponseSchema,
   simulateCancelInput,
   simulateCancelResponseSchema,
+  billingEntitlementsSchema,
   type PublicUser,
 } from "../../../src/lib/contract";
+import { getEntitlements } from "../entitlements";
 import {
   assertCloudSimEnabled,
   assertRateLimits,
@@ -240,6 +242,10 @@ export const appRouter = router({
       const baseUrl = process.env.PUBLIC_APP_URL ?? "http://localhost:3000";
       return provider.createCheckout({ userId: ctx.user.id, email: ctx.user.email, baseUrl });
     }),
+    /** Phase 5C: effective tier, quota usage, and paid-through date. */
+    entitlements: protectedProcedure.query(async ({ ctx }) => {
+      return billingEntitlementsSchema.parse(await getEntitlements(ctx.user.id));
+    }),
   }),
 
   onboarding: router({
@@ -308,9 +314,10 @@ export const appRouter = router({
     /** Reserve a run row + signed upload URL, then push a dispatch task. The client PUTs the project tarball before the task fires. */
     enqueue: protectedProcedure.input(simulateEnqueueInput).mutation(async ({ input, ctx }) => {
       assertCloudSimEnabled();
-      // Phase 4 Slice 4A: per-user daily + concurrent caps, enforced in
-      // Postgres before any GCS write or task dispatch (see sim.ts).
-      await assertRateLimits(ctx.user.id);
+      // Phase 4 Slice 4A: concurrent cap; Phase 5 Slice 5C: tier monthly quota.
+      // Both enforced in Postgres before any GCS write or task dispatch.
+      const entitlements = await getEntitlements(ctx.user.id);
+      await assertRateLimits(ctx.user.id, entitlements.tier);
       const runId = randomUUID();
       const now = new Date().toISOString();
       await db.insert(schema.simulationRuns).values({
