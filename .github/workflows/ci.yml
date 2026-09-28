@@ -60,12 +60,43 @@ jobs:
       - name: Browser check
         run: node scripts/browser-check.mjs
 
+  # Wire check: pins the browser-visible JSON shape of billing.verify across
+  # the api -> stringz-pay seam (fixture stub + real api + scratch postgres).
+  # Blocking: this is the regression net for the envelope bugs that cost
+  # multiple live debugging rounds (stringz issue #58).
+  wire:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flowkit
+          POSTGRES_PASSWORD: flowkit
+          POSTGRES_DB: flowkit
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U flowkit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://flowkit:flowkit@localhost:5432/flowkit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Wire check (billing.verify browser-visible shape)
+        run: bun server/test/verify-wire-check.ts
+        env:
+          VERIFY_RETRY_ATTEMPTS: "2"
+          VERIFY_RETRY_INTERVAL_MS: "50"
+
   # Auto-deploy to Cloud Run on every merge to main, after quality passes.
   # Auth is Workload Identity Federation (OIDC) - no GCP keys in GitHub.
   # workflow_dispatch is a no-infra-change dry run: it exercises the exact
   # same build+deploy path from a branch before merge.
   deploy:
-    needs: quality
+    needs: [quality, wire]
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     concurrency:
