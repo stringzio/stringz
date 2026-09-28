@@ -28,17 +28,19 @@ const VERIFY_INTERVAL_MS = 4_000;
  *  trips when the network itself is degraded. */
 const VERIFY_MAX_ATTEMPTS = 25;
 
-/** A fresh transfer has 0-1 confirmations; stringz-pay credits at the chain's
- *  required depth (5 on Avalanche, 12-60 elsewhere). Verify is idempotent per
- *  (chain, txHash) - a retry returns the original credit instead of
- *  double-extending - so polling until the threshold is safe. */
+/** A fresh transfer is invisible to the chain for the first seconds: the
+ *  receipt does not exist yet (TX_NOT_FOUND), and once it does, stringz-pay
+ *  credits only at the chain's required depth (INSUFFICIENT_CONFIRMATIONS,
+ *  5 on Avalanche, 12-60 elsewhere). Verify is idempotent per (chain,
+ *  txHash) - a retry returns the original credit instead of double-extending
+ *  - so polling through both transient states is safe. */
 async function verifyWithRetry(input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" }) {
   for (let attempt = 1; ; attempt++) {
     try {
       return await api.billing.verify(input);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (/INSUFFICIENT_CONFIRMATIONS/i.test(msg) && attempt < VERIFY_MAX_ATTEMPTS) {
+      if (/(INSUFFICIENT_CONFIRMATIONS|TX_NOT_FOUND)/i.test(msg) && attempt < VERIFY_MAX_ATTEMPTS) {
         await sleep(VERIFY_INTERVAL_MS);
         continue;
       }
@@ -60,6 +62,8 @@ function friendlyPaymentError(err: unknown, network: string, symbol: string): st
     return `Your wallet does not have enough ${symbol} on ${network} for this payment.`;
   if (/INSUFFICIENT_CONFIRMATIONS/i.test(raw))
     return "Your payment was sent but has not finished confirming. Check your wallet's activity - if the transfer shows there, do not pay again; contact us and we will credit it.";
+  if (/TX_NOT_FOUND/i.test(raw))
+    return "We could not find your payment transaction yet. Check your wallet's activity - if the transfer shows there, do not pay again; contact us and we will credit it.";
   if (/UNDERPAID/i.test(raw))
     return "The amount sent does not match the plan price. Send the exact amount shown at checkout.";
   if (/timeout|timed out/i.test(raw))
@@ -307,7 +311,7 @@ export default function ProSheet({
           <div className="mb-4 flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3">
             <span className="text-[12px] font-medium text-gray-500">You send</span>
             <span className="text-[15px] font-bold text-[#1a1a1a]">
-              {(chargeUnits(priceCents) / 10n ** 6n).toString()} {token.symbol}
+              {fmtUnits(charge)} {token.symbol}
             </span>
           </div>
           {!isConnected && (
@@ -325,7 +329,7 @@ export default function ProSheet({
             {insufficient
               ? `Not enough ${token.symbol} on ${dest.label}`
               : isConnected
-                ? `Pay ${(chargeUnits(priceCents) / 10n ** 6n).toString()} ${token.symbol} on ${dest.label}`
+                ? `Pay ${fmtUnits(charge)} ${token.symbol} on ${dest.label}`
                 : "Connect wallet"}
           </button>
           <p className="mt-3 text-center text-[10.5px] leading-snug text-gray-400">
