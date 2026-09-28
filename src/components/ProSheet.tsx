@@ -63,6 +63,8 @@ function friendlyPaymentError(err: unknown, network: string, symbol: string): st
     return "We could not find your payment transaction yet. Check your wallet's activity - if the transfer shows there, do not pay again; contact us and we will credit it.";
   if (/UNDERPAID/i.test(raw))
     return "The amount sent does not match the plan price. Send the exact amount shown at checkout.";
+  if (/WRONG_RECIPIENT/i.test(raw))
+    return "That transaction does not contain a payment to our treasury address. If you sent it manually, contact us with the transaction link and we will credit it.";
   if (/timeout|timed out/i.test(raw))
     return "The network did not respond in time. Check your wallet - if the payment went out, do not retry; contact us.";
   console.warn("[checkout] raw payment error:", raw);
