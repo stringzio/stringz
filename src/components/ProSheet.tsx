@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Sparkles, Loader2 } from "lucide-react";
 import { useAccount, useSwitchChain, useWriteContract, useReadContracts } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
@@ -23,30 +23,27 @@ const CHAIN_ID: Record<PayChain, number> = { base: base.id, arbitrum: arbitrum.i
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const VERIFY_INTERVAL_MS = 4_000;
-/** ~100s ceiling; every supported chain confirms in seconds, so this only
- *  trips when the network itself is degraded. */
-const VERIFY_MAX_ATTEMPTS = 25;
+const ENTITLEMENT_WATCH_INTERVAL_MS = 5_000;
+/** 10 min ceiling. The credit is already safe in the database, so a timeout
+ *  here only delays discovery (the app self-heals via entitlements) - it
+ *  never loses the payment. */
+const ENTITLEMENT_WATCH_MAX_POLLS = 120;
 
-/** A fresh transfer is invisible to the chain for the first seconds: the
- *  receipt does not exist yet (TX_NOT_FOUND), and once it does, stringz-pay
- *  credits only at the chain's required depth (INSUFFICIENT_CONFIRMATIONS,
- *  5 on Avalanche, 12-60 elsewhere). Verify is idempotent per (chain,
- *  txHash) - a retry returns the original credit instead of double-extending
- *  - so polling through both transient states is safe. Rejections are typed
- *  results, so "wait" is decided by code, not message text. */
-async function verifyWithRetry(input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" }) {
-  for (let attempt = 1; ; attempt++) {
-    const result = await api.billing.verify(input);
-    if (result.outcome === "credited") return result;
-    const transient = result.code === "TX_NOT_FOUND" || result.code === "INSUFFICIENT_CONFIRMATIONS";
-    if (transient && attempt < VERIFY_MAX_ATTEMPTS) {
-      await sleep(VERIFY_INTERVAL_MS);
-      continue;
-    }
-    // Surface as a coded error so friendlyPaymentError's mappings apply.
-    throw new Error(`${result.code}: ${result.message}`);
+/** Thrown when the sheet is closed mid-confirmation; pay() swallows it so a
+ *  deliberate close never surfaces as an error state. */
+class WatchCancelled extends Error {}
+
+/** After billing.verify returns "pending", the credit lands in the
+ *  entitlements read once the chain confirms. Poll that - the same source of
+ *  truth every paywalled surface renders from - instead of re-verifying. */
+async function watchForEntitlement(isCancelled: () => boolean) {
+  for (let poll = 0; poll < ENTITLEMENT_WATCH_MAX_POLLS; poll++) {
+    if (isCancelled()) throw new WatchCancelled();
+    await sleep(ENTITLEMENT_WATCH_INTERVAL_MS);
+    const entitlements = await api.billing.entitlements();
+    if (entitlements.tier !== "community") return entitlements;
   }
+  throw new Error("CONFIRMATION_TIMEOUT: the chain did not confirm the payment within 10 minutes");
 }
 
 /** Map wallet/provider errors to something a human can act on. Raw viem dumps
@@ -115,8 +112,10 @@ export default function ProSheet({
   const [chain, setChain] = useState<PayChain>("base");
   const [symbol, setSymbol] = useState<"USDC" | "USDT" | "USDC.e">("USDC");
   const [error, setError] = useState("");
+  const [rawError, setRawError] = useState("");
   const [paidThrough, setPaidThrough] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const cancelledRef = useRef(false);
 
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
@@ -160,6 +159,7 @@ export default function ProSheet({
     }
     setStep("paying");
     setError("");
+    setRawError("");
     setConfirming(false);
     try {
       // switchChainAsync actually awaits the wallet prompt; the sync variant
@@ -174,10 +174,22 @@ export default function ProSheet({
         args: [TREASURY_EVM as `0x${string}`, chargeUnits(priceCents)],
       });
       setConfirming(true);
-      const result = await verifyWithRetry({ chain, txHash, plan });
-      setPaidThrough(result.paidThrough);
+      cancelledRef.current = false;
+      // One call: the server retries stringz-pay internally and answers
+      // credited | rejected | pending (chain still catching up).
+      const result = await api.billing.verify({ chain, txHash, plan });
+      if (result.outcome === "credited") {
+        setPaidThrough(result.paidThrough);
+        setStep("success");
+        return;
+      }
+      if (result.outcome === "rejected") throw new Error(`${result.code}: ${result.message}`);
+      const entitlements = await watchForEntitlement(() => cancelledRef.current);
+      setPaidThrough(entitlements.paidThrough ?? "");
       setStep("success");
     } catch (err) {
+      if (err instanceof WatchCancelled) return;
+      setRawError(err instanceof Error ? err.message : String(err));
       setError(friendlyPaymentError(err, dest.label, token.symbol));
       setStep("error");
     } finally {
@@ -186,8 +198,10 @@ export default function ProSheet({
   };
 
   const close = () => {
+    cancelledRef.current = true;
     setStep("offer");
     setError("");
+    setRawError("");
     onClose();
   };
 
@@ -377,6 +391,11 @@ export default function ProSheet({
           <img src="/assets/payment-error.webp" alt="Payment failed" className="h-36 w-auto" />
           <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Payment did not go through</p>
           <p className="mt-1.5 max-w-64 text-center text-[12px] leading-snug text-gray-500">{error}</p>
+          {import.meta.env.DEV && rawError && (
+            <p className="mt-2 max-w-64 break-words rounded-xl bg-gray-50 px-3 py-2 text-center font-mono text-[10px] leading-snug text-gray-400">
+              {rawError}
+            </p>
+          )}
           <button
             onClick={() => setStep("checkout")}
             className="mt-5 w-full rounded-full bg-[#1a1a1a] py-3.5 text-[13.5px] font-bold text-white transition active:scale-[0.98]"

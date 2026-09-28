@@ -187,7 +187,9 @@ export type BillingEntitlements = z.infer<typeof billingEntitlementsSchema>;
 /** billing.verify result. Payment rejections are expected business outcomes
  *  (unconfirmed, underpaid, wrong recipient), not exceptions - the server
  *  returns them typed so the client can retry or explain without parsing
- *  exception message text. */
+ *  exception message text. "pending" means the server-side retry budget was
+ *  exhausted while the chain was still catching up; the client should watch
+ *  billing.entitlements, where the credit lands when it confirms. */
 export const verifyPaymentResultSchema = z.discriminatedUnion("outcome", [
   z.object({
     outcome: z.literal("credited"),
@@ -196,6 +198,9 @@ export const verifyPaymentResultSchema = z.discriminatedUnion("outcome", [
     plan: z.string(),
     userId: z.string(),
     paidThrough: z.string(),
+  }),
+  z.object({
+    outcome: z.literal("pending"),
   }),
   z.object({
     outcome: z.literal("rejected"),

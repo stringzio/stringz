@@ -7,7 +7,7 @@ import { publicProcedure, protectedProcedure, router } from "./trpc";
 import { db, schema } from "../db/client";
 import { createSession, destroySession, issueNonce, consumeNonce } from "../session";
 import { PLANS } from "../billing";
-import { verifyPayment } from "../stringzPay";
+import { verifyPaymentWithRetry } from "../stringzPay";
 import {
   waitlistJoinInput,
   newsletterSubscribeInput,
@@ -236,29 +236,22 @@ export const appRouter = router({
 
   billing: router({
     /** Verify a wallet payment with stringz-pay (server-held key) and credit
-     *  this user's entitlement. Expected rejections (unconfirmed, underpaid,
-     *  wrong recipient) come back as a typed { outcome: "rejected" } result -
-     *  the client retries or explains from the code without parsing exception
-     *  text (which never reached it through tRPC's error envelope). */
+     *  this user's entitlement. Server-side retries absorb the chain's
+     *  "not yet" states (unmined, unconfirmed), so the browser makes one
+     *  call: credited on success, rejected (typed code) on a real rejection,
+     *  pending when the retry budget was exhausted - the client then watches
+     *  billing.entitlements, where the credit lands when it confirms. */
     verify: protectedProcedure
       .input(z.object({ chain: z.string(), txHash: z.string(), plan: z.enum(["pro_monthly", "pro_annual", "team_monthly", "team_annual"]) }))
       .mutation(async ({ input, ctx }): Promise<VerifyPaymentResult> => {
-        try {
-          const result = await verifyPayment({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
-          return {
-            outcome: "credited",
-            credited: result.credited,
-            alreadyCredited: result.alreadyCredited,
-            plan: result.plan,
-            userId: result.userId,
-            paidThrough: result.paidThrough,
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const coded = /^([A-Z_]+): (.*)$/s.exec(msg);
-          if (coded) return { outcome: "rejected", code: coded[1], message: coded[2] };
-          throw err;
-        }
+        const result = await verifyPaymentWithRetry({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+        console.warn(
+          "[billing.verify]",
+          result.outcome,
+          result.outcome === "rejected" ? result.code : "",
+          result.outcome === "rejected" ? result.message : "",
+        );
+        return result;
       }),
     /** Phase 5C: effective tier, quota usage, and paid-through date. */
     entitlements: protectedProcedure.query(async ({ ctx }) => {
