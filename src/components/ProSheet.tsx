@@ -33,19 +33,19 @@ const VERIFY_MAX_ATTEMPTS = 25;
  *  credits only at the chain's required depth (INSUFFICIENT_CONFIRMATIONS,
  *  5 on Avalanche, 12-60 elsewhere). Verify is idempotent per (chain,
  *  txHash) - a retry returns the original credit instead of double-extending
- *  - so polling through both transient states is safe. */
+ *  - so polling through both transient states is safe. Rejections are typed
+ *  results, so "wait" is decided by code, not message text. */
 async function verifyWithRetry(input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" }) {
   for (let attempt = 1; ; attempt++) {
-    try {
-      return await api.billing.verify(input);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/(INSUFFICIENT_CONFIRMATIONS|TX_NOT_FOUND)/i.test(msg) && attempt < VERIFY_MAX_ATTEMPTS) {
-        await sleep(VERIFY_INTERVAL_MS);
-        continue;
-      }
-      throw err;
+    const result = await api.billing.verify(input);
+    if (result.outcome === "credited") return result;
+    const transient = result.code === "TX_NOT_FOUND" || result.code === "INSUFFICIENT_CONFIRMATIONS";
+    if (transient && attempt < VERIFY_MAX_ATTEMPTS) {
+      await sleep(VERIFY_INTERVAL_MS);
+      continue;
     }
+    // Surface as a coded error so friendlyPaymentError's mappings apply.
+    throw new Error(`${result.code}: ${result.message}`);
   }
 }
 

@@ -26,6 +26,7 @@ import {
   simulateCancelResponseSchema,
   billingEntitlementsSchema,
   type PublicUser,
+  type VerifyPaymentResult,
 } from "../../../src/lib/contract";
 import { getEntitlements } from "../entitlements";
 import {
@@ -234,12 +235,30 @@ export const appRouter = router({
   }),
 
   billing: router({
-    /** Phase 5 wiring: verify a wallet payment with stringz-pay (server-held
-     *  key) and credit this user's entitlement. */
+    /** Verify a wallet payment with stringz-pay (server-held key) and credit
+     *  this user's entitlement. Expected rejections (unconfirmed, underpaid,
+     *  wrong recipient) come back as a typed { outcome: "rejected" } result -
+     *  the client retries or explains from the code without parsing exception
+     *  text (which never reached it through tRPC's error envelope). */
     verify: protectedProcedure
       .input(z.object({ chain: z.string(), txHash: z.string(), plan: z.enum(["pro_monthly", "pro_annual", "team_monthly", "team_annual"]) }))
-      .mutation(async ({ input, ctx }) => {
-        return verifyPayment({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+      .mutation(async ({ input, ctx }): Promise<VerifyPaymentResult> => {
+        try {
+          const result = await verifyPayment({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+          return {
+            outcome: "credited",
+            credited: result.credited,
+            alreadyCredited: result.alreadyCredited,
+            plan: result.plan,
+            userId: result.userId,
+            paidThrough: result.paidThrough,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const coded = /^([A-Z_]+): (.*)$/s.exec(msg);
+          if (coded) return { outcome: "rejected", code: coded[1], message: coded[2] };
+          throw err;
+        }
       }),
     /** Phase 5C: effective tier, quota usage, and paid-through date. */
     entitlements: protectedProcedure.query(async ({ ctx }) => {
