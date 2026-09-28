@@ -73,7 +73,7 @@ export const usd = (cents: number): string =>
 export type PayChain = "base" | "arbitrum" | "avalanche" | "ethereum";
 
 export interface TokenDest {
-  symbol: "USDC" | "USDT";
+  symbol: "USDC" | "USDT" | "USDC.e";
   address: string;
 }
 
@@ -98,6 +98,8 @@ export const PAY_CHAINS: readonly { id: PayChain; label: string; tokens: TokenDe
     label: "Avalanche",
     tokens: [
       { symbol: "USDC", address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E" },
+      // Bridged USDC.e - what most Avalanche wallets actually hold.
+      { symbol: "USDC.e", address: "0xA7D7079b0FEaD91F3e65f86E8915Cb59c1a4C664" },
       { symbol: "USDT", address: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7" },
     ],
   },
