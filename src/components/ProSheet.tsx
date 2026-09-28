@@ -65,7 +65,7 @@ export default function ProSheet({
   const [step, setStep] = useState<Step>("offer");
   const [annual, setAnnual] = useState(false);
   const [chain, setChain] = useState<PayChain>("base");
-  const [symbol, setSymbol] = useState<"USDC" | "USDT">("USDC");
+  const [symbol, setSymbol] = useState<"USDC" | "USDT" | "USDC.e">("USDC");
   const [error, setError] = useState("");
   const [paidThrough, setPaidThrough] = useState("");
 
