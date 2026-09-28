@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Check, Sparkles, Loader2 } from "lucide-react";
-import { useAccount, useSwitchChain, useWriteContract } from "wagmi";
+import { useAccount, useSwitchChain, useWriteContract, useReadContracts } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { base, arbitrum, avalanche, mainnet } from "wagmi/chains";
 import Sheet from "./Sheet";
@@ -21,6 +21,32 @@ const PRO = [
 
 const CHAIN_ID: Record<PayChain, number> = { base: base.id, arbitrum: arbitrum.id, avalanche: avalanche.id, ethereum: mainnet.id };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const VERIFY_INTERVAL_MS = 4_000;
+/** ~100s ceiling; every supported chain confirms in seconds, so this only
+ *  trips when the network itself is degraded. */
+const VERIFY_MAX_ATTEMPTS = 25;
+
+/** A fresh transfer has 0-1 confirmations; stringz-pay credits at the chain's
+ *  required depth (5 on Avalanche, 12-60 elsewhere). Verify is idempotent per
+ *  (chain, txHash) - a retry returns the original credit instead of
+ *  double-extending - so polling until the threshold is safe. */
+async function verifyWithRetry(input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" }) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await api.billing.verify(input);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/INSUFFICIENT_CONFIRMATIONS/i.test(msg) && attempt < VERIFY_MAX_ATTEMPTS) {
+        await sleep(VERIFY_INTERVAL_MS);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 /** Map wallet/provider errors to something a human can act on. Raw viem dumps
  *  (chain mismatch, revert data) stay out of the UI; the raw message is kept
  *  in the console for debugging. */
@@ -32,6 +58,10 @@ function friendlyPaymentError(err: unknown, network: string, symbol: string): st
     return "You cancelled the transaction in your wallet. Nothing was sent.";
   if (/insufficient funds|exceeds balance|not enough/i.test(raw))
     return `Your wallet does not have enough ${symbol} on ${network} for this payment.`;
+  if (/INSUFFICIENT_CONFIRMATIONS/i.test(raw))
+    return "Your payment was sent but has not finished confirming. Check your wallet's activity - if the transfer shows there, do not pay again; contact us and we will credit it.";
+  if (/UNDERPAID/i.test(raw))
+    return "The amount sent does not match the plan price. Send the exact amount shown at checkout.";
   if (/timeout|timed out/i.test(raw))
     return "The network did not respond in time. Check your wallet - if the payment went out, do not retry; contact us.";
   console.warn("[checkout] raw payment error:", raw);
@@ -42,6 +72,20 @@ const ERC20_TRANSFER_ABI = [
     { name: "to", type: "address" }, { name: "amount", type: "uint256" },
   ], outputs: [{ name: "", type: "bool" }] },
 ] as const;
+
+const ERC20_BALANCE_ABI = [
+  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [
+    { name: "account", type: "address" },
+  ], outputs: [{ name: "", type: "uint256" }] },
+] as const;
+
+/** Human-readable 6-decimal stablecoin amount ("0.369"). Display only. */
+function fmtUnits(amount: bigint): string {
+  const s = amount.toString().padStart(7, "0");
+  const int = s.slice(0, -6);
+  const frac = s.slice(-6).replace(/0+$/, "");
+  return frac ? `${int}.${frac}` : int;
+}
 
 type Step = "offer" | "checkout" | "paying" | "success" | "error";
 
@@ -68,6 +112,7 @@ export default function ProSheet({
   const [symbol, setSymbol] = useState<"USDC" | "USDT" | "USDC.e">("USDC");
   const [error, setError] = useState("");
   const [paidThrough, setPaidThrough] = useState("");
+  const [confirming, setConfirming] = useState(false);
 
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
@@ -78,6 +123,31 @@ export default function ProSheet({
   const dest = PAY_CHAINS.find((c) => c.id === chain) ?? PAY_CHAINS[0];
   const token = dest.tokens.find((t) => t.symbol === symbol) ?? dest.tokens[0];
   const plan = (annual ? "pro_annual" : "pro_monthly") as "pro_annual" | "pro_monthly";
+  const charge = chargeUnits(priceCents);
+
+  // Balance-aware picker: read the connected wallet's real on-chain balance
+  // for every offered token so the choice is grounded in what the wallet
+  // actually holds. Reads go through the public client, so balances appear
+  // even before the wallet switches to the target chain.
+  const { data: balances } = useReadContracts({
+    contracts: address
+      ? dest.tokens.map((t) => ({
+          chainId: CHAIN_ID[chain],
+          address: t.address as `0x${string}`,
+          abi: ERC20_BALANCE_ABI,
+          functionName: "balanceOf",
+          args: [address],
+        }))
+      : [],
+    query: { enabled: !!address },
+  });
+  const balanceOf = (sym: string): bigint | undefined => {
+    const i = dest.tokens.findIndex((t) => t.symbol === sym);
+    const r = i >= 0 ? balances?.[i]?.result : undefined;
+    return typeof r === "bigint" ? r : undefined;
+  };
+  const walletBalance = balanceOf(token.symbol);
+  const insufficient = isConnected && walletBalance !== undefined && walletBalance < charge;
 
   const pay = async () => {
     if (!isConnected || !address) {
@@ -86,6 +156,7 @@ export default function ProSheet({
     }
     setStep("paying");
     setError("");
+    setConfirming(false);
     try {
       // switchChainAsync actually awaits the wallet prompt; the sync variant
       // swallows rejections and leaves the wallet on the wrong chain, which
@@ -98,12 +169,15 @@ export default function ProSheet({
         functionName: "transfer",
         args: [TREASURY_EVM as `0x${string}`, chargeUnits(priceCents)],
       });
-      const result = await api.billing.verify({ chain, txHash, plan });
+      setConfirming(true);
+      const result = await verifyWithRetry({ chain, txHash, plan });
       setPaidThrough(result.paidThrough);
       setStep("success");
     } catch (err) {
       setError(friendlyPaymentError(err, dest.label, token.symbol));
       setStep("error");
+    } finally {
+      setConfirming(false);
     }
   };
 
@@ -198,15 +272,35 @@ export default function ProSheet({
           </div>
           <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-gray-400">Token</div>
           <div className="mb-4 grid grid-cols-2 gap-1.5">
-            {dest.tokens.map((t) => (
-              <button
-                key={t.symbol}
-                onClick={() => setSymbol(t.symbol)}
-                className={`rounded-full py-2 text-[11.5px] font-bold transition ${token.symbol === t.symbol ? "bg-[#1a1a1a] text-white" : "bg-gray-100 text-gray-500"}`}
-              >
-                {t.symbol}
-              </button>
-            ))}
+            {dest.tokens.map((t) => {
+              const b = balanceOf(t.symbol);
+              const short = b !== undefined && b < charge;
+              return (
+                <button
+                  key={t.symbol}
+                  onClick={() => setSymbol(t.symbol)}
+                  className={`flex flex-col items-center rounded-2xl py-2 transition ${
+                    token.symbol === t.symbol
+                      ? "bg-[#1a1a1a] text-white"
+                      : short
+                        ? "bg-gray-100 text-gray-400"
+                        : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  <span className="text-[11.5px] font-bold leading-tight">{t.symbol}</span>
+                  {b !== undefined && (
+                    <span
+                      className={`mt-0.5 text-[9.5px] leading-tight ${
+                        token.symbol === t.symbol ? "text-white/70" : short ? "text-red-400" : "text-gray-400"
+                      }`}
+                    >
+                      {fmtUnits(b)}
+                      {short ? " - not enough" : " available"}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
           </div>
           <div className="md:border-l md:border-gray-100 md:pl-8 md:flex md:flex-col md:justify-center">
@@ -223,9 +317,16 @@ export default function ProSheet({
           )}
           <button
             onClick={pay}
-            className="w-full rounded-full bg-[#1a1a1a] py-3.5 text-[13.5px] font-bold text-white transition active:scale-[0.98]"
+            disabled={insufficient}
+            className={`w-full rounded-full py-3.5 text-[13.5px] font-bold transition active:scale-[0.98] ${
+              insufficient ? "cursor-not-allowed bg-gray-200 text-gray-400" : "bg-[#1a1a1a] text-white"
+            }`}
           >
-            {isConnected ? `Pay ${(chargeUnits(priceCents) / 10n ** 6n).toString()} ${token.symbol} on ${dest.label}` : "Connect wallet"}
+            {insufficient
+              ? `Not enough ${token.symbol} on ${dest.label}`
+              : isConnected
+                ? `Pay ${(chargeUnits(priceCents) / 10n ** 6n).toString()} ${token.symbol} on ${dest.label}`
+                : "Connect wallet"}
           </button>
           <p className="mt-3 text-center text-[10.5px] leading-snug text-gray-400">
             One payment, {annual ? "12 months" : "30 days"} of Pro. No auto-renewal - extend any time with a
@@ -238,9 +339,13 @@ export default function ProSheet({
       {step === "paying" && (
         <div className="flex flex-col items-center py-10 md:max-w-md md:mx-auto">
           <Loader2 size={28} className="animate-spin text-[#3d5f8a]" />
-          <p className="mt-4 text-[13px] font-semibold text-[#1a1a1a]">Confirm in your wallet…</p>
+          <p className="mt-4 text-[13px] font-semibold text-[#1a1a1a]">
+            {confirming ? "Confirming on-chain…" : "Confirm in your wallet…"}
+          </p>
           <p className="mt-1 max-w-56 text-center text-[11.5px] leading-snug text-gray-400">
-            Approve the transfer, then wait a few seconds while we confirm it on-chain.
+            {confirming
+              ? "The transfer is submitted. Waiting for network confirmations - usually a few seconds."
+              : "Approve the transfer, then wait a few seconds while we confirm it on-chain."}
           </p>
         </div>
       )}
