@@ -184,6 +184,27 @@ export const billingEntitlementsSchema = z.object({
 });
 export type BillingEntitlements = z.infer<typeof billingEntitlementsSchema>;
 
+/** billing.verify result. Payment rejections are expected business outcomes
+ *  (unconfirmed, underpaid, wrong recipient), not exceptions - the server
+ *  returns them typed so the client can retry or explain without parsing
+ *  exception message text. */
+export const verifyPaymentResultSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("credited"),
+    credited: z.boolean(),
+    alreadyCredited: z.boolean(),
+    plan: z.string(),
+    userId: z.string(),
+    paidThrough: z.string(),
+  }),
+  z.object({
+    outcome: z.literal("rejected"),
+    code: z.string(),
+    message: z.string(),
+  }),
+]);
+export type VerifyPaymentResult = z.infer<typeof verifyPaymentResultSchema>;
+
 export const simulateRunSchema = z.object({
   id: z.string(),
   flowId: z.string().nullable(),

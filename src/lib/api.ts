@@ -14,6 +14,7 @@ import type {
   SimulateCancelInput,
   SimulateCancelResponse,
   BillingEntitlements,
+  VerifyPaymentResult,
   SimulateListResponse,
   SimulateRun,
   SiweVerifyInput,
@@ -67,9 +68,10 @@ export const api = {
     remove: (input: { id: string }) => call<{ ok: boolean }>("flows.remove", input),
   },
   billing: {
-    /** Verify a wallet payment with the stringz-pay rail (server-held key). */
+    /** Verify a wallet payment with the stringz-pay rail (server-held key).
+     *  Rejections arrive as a typed result, not an exception. */
     verify: (input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" | "team_monthly" | "team_annual" }) =>
-      call<{ credited: boolean; alreadyCredited: boolean; plan: string; paidThrough: string }>("billing.verify", input),
+      call<VerifyPaymentResult>("billing.verify", input),
     entitlements: () => call<BillingEntitlements>("billing.entitlements"),
   },
   onboarding: {
