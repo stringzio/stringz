@@ -49,6 +49,7 @@ export const PLANS: readonly PlanInfo[] = [
 /** Feature rows for the comparison table; null = not included. */
 export const FEATURE_ROWS: readonly { label: string; values: Record<Tier, string | null> }[] = [
   { label: "Cloud simulations / month", values: { community: "50", pro: "1,000", team: "4,000" } },
+  { label: "Saved flows", values: { community: "3", pro: "250", team: "250" } },
   { label: "Hosted builder with autosave", values: { community: null, pro: "check", team: "check" } },
   { label: "Ephemeral run secrets", values: { community: null, pro: "check", team: "check" } },
   { label: "Export + self-host", values: { community: "check", pro: "check", team: "check" } },

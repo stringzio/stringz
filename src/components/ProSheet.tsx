@@ -5,6 +5,7 @@ import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { base, arbitrum, avalanche, mainnet } from "wagmi/chains";
 import Sheet from "./Sheet";
 import { PLANS, PAY_CHAINS, TREASURY_EVM, chargeUnits, usd, type PayChain } from "../lib/pricing";
+import { SUPPORT_X_URL, SUPPORT_X_HANDLE } from "../lib/support";
 import { api } from "../lib/api";
 
 const COMMUNITY = [
@@ -423,6 +424,14 @@ export default function ProSheet({
           <img src="/assets/payment-error.webp" alt="Payment failed" className="h-36 w-auto" />
           <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Payment did not go through</p>
           <p className="mt-1.5 max-w-64 text-center text-[12px] leading-snug text-gray-500">{error}</p>
+          <a
+            href={SUPPORT_X_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 text-[12px] font-semibold text-[#3d5f8a] transition hover:underline"
+          >
+            Payment stuck or funds already sent? DM {SUPPORT_X_HANDLE} on X and we will sort it out.
+          </a>
           {import.meta.env.DEV && rawError && (
             <p className="mt-2 max-w-64 break-words rounded-xl bg-gray-50 px-3 py-2 text-center font-mono text-[10px] leading-snug text-gray-400">
               {rawError}
