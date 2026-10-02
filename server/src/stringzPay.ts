@@ -44,8 +44,11 @@ export async function verifyPayment(input: VerifyPaymentInput): Promise<Verified
  *  absorbs them instead of every client re-implementing the same poll loop
  *  over a lossy wire. Non-transient codes are real rejections and fail
  *  fast. Idempotency lives in stringz-pay (unique (chain, tx_hash) credit),
- *  so retries can never double-credit. */
-const RETRY_ATTEMPTS = Number(process.env.VERIFY_RETRY_ATTEMPTS ?? 10);
+ *  so retries can never double-credit.
+ *  Default budget: 45 x 3.5s ≈ 157s - enough for the deepest required
+ *  confirmations we set (ethereum: 12 x ~12s ≈ 144s, base: 20 blocks)
+ *  while staying under the Cloud Run request timeout (300s). */
+const RETRY_ATTEMPTS = Number(process.env.VERIFY_RETRY_ATTEMPTS ?? 45);
 const RETRY_INTERVAL_MS = Number(process.env.VERIFY_RETRY_INTERVAL_MS ?? 3_500);
 const TRANSIENT_CODES = /^(TX_NOT_FOUND|INSUFFICIENT_CONFIRMATIONS)$/;
 
