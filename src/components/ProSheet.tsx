@@ -48,7 +48,9 @@ async function watchForEntitlement(isCancelled: () => boolean) {
 
 /** Map wallet/provider errors to something a human can act on. Raw viem dumps
  *  (chain mismatch, revert data) stay out of the UI; the raw message is kept
- *  in the console for debugging. */
+ *  in the console for debugging. Any state where funds may already be moving
+ *  says "do not pay again" - a double-payment instruction is the worst
+ *  possible copy here. */
 function friendlyPaymentError(err: unknown, network: string, symbol: string): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (/does not match the target chain|Current Chain ID|chain mismatch/i.test(raw))
@@ -57,6 +59,13 @@ function friendlyPaymentError(err: unknown, network: string, symbol: string): st
     return "You cancelled the transaction in your wallet. Nothing was sent.";
   if (/insufficient funds|exceeds balance|not enough/i.test(raw))
     return `Your wallet does not have enough ${symbol} on ${network} for this payment.`;
+  // Ordered: the generic "timeout" branch below would also match these.
+  if (/^CONFIRMATION_TIMEOUT:/i.test(raw))
+    return "Your payment was sent but the chain did not confirm it within 10 minutes. Check your wallet's activity - if the transfer shows there, do NOT pay again; contact us and we will credit it.";
+  if (/TX_FAILED/i.test(raw))
+    return "Your payment transaction reverted on-chain, so no payment was made. Check the token and network in your wallet, then try again.";
+  if (/WRONG_TOKEN/i.test(raw))
+    return "That transaction used a token this plan does not accept. Pay with the token shown at checkout.";
   if (/INSUFFICIENT_CONFIRMATIONS/i.test(raw))
     return "Your payment was sent but has not finished confirming. Check your wallet's activity - if the transfer shows there, do not pay again; contact us and we will credit it.";
   if (/TX_NOT_FOUND/i.test(raw))
@@ -68,6 +77,10 @@ function friendlyPaymentError(err: unknown, network: string, symbol: string): st
   if (/timeout|timed out/i.test(raw))
     return "The network did not respond in time. Check your wallet - if the payment went out, do not retry; contact us.";
   console.warn("[checkout] raw payment error:", raw);
+  // Coded rail rejections that fell through (e.g. PAY_ERROR): funds may be
+  // moving, so never tell the user to blindly try again.
+  if (/^[A-Z_]+: /s.test(raw))
+    return "Something went wrong verifying your payment. Check your wallet's activity before paying again - if the transfer shows there, do not pay a second time; contact us and we will credit it.";
   return "The payment could not be completed. Check your wallet and network, then try again.";
 }
 const ERC20_TRANSFER_ABI = [
@@ -134,7 +147,7 @@ export default function ProSheet({
   // for every offered token so the choice is grounded in what the wallet
   // actually holds. Reads go through the public client, so balances appear
   // even before the wallet switches to the target chain.
-  const { data: balances } = useReadContracts({
+  const { data: balances, isPending: balancesPending } = useReadContracts({
     contracts: address
       ? dest.tokens.map((t) => ({
           chainId: CHAIN_ID[chain],
@@ -153,12 +166,17 @@ export default function ProSheet({
   };
   const walletBalance = balanceOf(token.symbol);
   const insufficient = isConnected && walletBalance !== undefined && walletBalance < charge;
+  /** Gate stays shut while the balance read is in flight; if the read errors
+   *  out, balances stay undefined, isPending flips false, and the gate opens
+   *  (the wallet itself is the backstop, same as before). */
+  const checkingBalance = isConnected && balancesPending;
 
   const pay = async () => {
     if (!isConnected || !address) {
       openConnectModal?.();
       return;
     }
+    cancelledRef.current = false;
     setStep("paying");
     setError("");
     setRawError("");
@@ -175,8 +193,14 @@ export default function ProSheet({
         functionName: "transfer",
         args: [TREASURY_EVM as `0x${string}`, chargeUnits(priceCents)],
       });
+      if (cancelledRef.current) {
+        // Sheet closed while the wallet prompt was open, but the transfer
+        // may already be submitted: verify it so the credit is never lost,
+        // just skip the watch and any UI on the closed sheet.
+        api.billing.verify({ chain, txHash, plan }).catch(() => {});
+        return;
+      }
       setConfirming(true);
-      cancelledRef.current = false;
       // One call: the server retries stringz-pay internally and answers
       // credited | rejected | pending (chain still catching up).
       const result = await api.billing.verify({ chain, txHash, plan });
@@ -337,16 +361,18 @@ export default function ProSheet({
           )}
           <button
             onClick={pay}
-            disabled={insufficient}
+            disabled={insufficient || checkingBalance}
             className={`w-full rounded-full py-3.5 text-[13.5px] font-bold transition active:scale-[0.98] ${
-              insufficient ? "cursor-not-allowed bg-gray-200 text-gray-400" : "bg-[#1a1a1a] text-white"
+              insufficient || checkingBalance ? "cursor-not-allowed bg-gray-200 text-gray-400" : "bg-[#1a1a1a] text-white"
             }`}
           >
             {insufficient
               ? `Not enough ${token.symbol} on ${dest.label}`
-              : isConnected
-                ? `Pay ${fmtUnits(charge)} ${token.symbol} on ${dest.label}`
-                : "Connect wallet"}
+              : checkingBalance
+                ? "Checking balance…"
+                : isConnected
+                  ? `Pay ${fmtUnits(charge)} ${token.symbol} on ${dest.label}`
+                  : "Connect wallet"}
           </button>
           <p className="mt-3 text-center text-[10.5px] leading-snug text-gray-400">
             One payment, {annual ? "12 months" : "30 days"} of Pro. No auto-renewal - extend any time with a
@@ -375,9 +401,13 @@ export default function ProSheet({
           <img src="/assets/payment-success.webp" alt="Payment successful" className="h-40 w-auto" />
           <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Welcome to Pro</p>
           <p className="mt-1.5 max-w-60 text-center text-[12px] leading-snug text-gray-500">
-            Your payment is confirmed. Pro is active until{" "}
-            <span className="font-bold text-[#1a1a1a]">{new Date(paidThrough).toLocaleDateString()}</span> - 1,000
-            cloud simulations per month are yours.
+            Your payment is confirmed. Pro is active
+            {paidThrough ? (
+              <>
+                {" "}until <span className="font-bold text-[#1a1a1a]">{new Date(paidThrough).toLocaleDateString()}</span>
+              </>
+            ) : null}{" "}
+            - 1,000 cloud simulations per month are yours.
           </p>
           <button
             onClick={close}
