@@ -28,7 +28,11 @@ const check = (name: string, cond: boolean, detail: unknown) => {
 
 /** The exact shapes stringz-pay's verifyHandler emits (pinned by its own
  *  api.test.ts). Selected deterministically by txHash so one boot covers all
- *  scenarios. */
+ *  scenarios. 0xfa/0xfb count calls: transient for the request-path retry
+ *  budget, decisive on the next call - the settle-later worker (stringz#62)
+ *  must land the credit (0xfa) or dead-letter with the reason (0xfb) with no
+ *  user retry in between. */
+const stubCalls = new Map<string, number>();
 const stub = Bun.serve({
   port: STUB_PORT,
   async fetch(req) {
@@ -36,10 +40,21 @@ const stub = Bun.serve({
     if (url.pathname !== "/verify") return new Response("not found", { status: 404 });
     const body = (await req.json().catch(() => ({}))) as { txHash?: string; userId?: string };
     const h = body.txHash ?? "";
-    if (h.startsWith("0xcc")) {
+    const call = (stubCalls.get(h) ?? 0) + 1;
+    stubCalls.set(h, call);
+    if (h.startsWith("0xfa") && call <= 2) {
+      return Response.json({ error: `no receipt for ${h} on avalanche`, code: "TX_NOT_FOUND" }, { status: 422 });
+    }
+    if (h.startsWith("0xfb") && call <= 2) {
+      return Response.json({ error: `no receipt for ${h} on avalanche`, code: "TX_NOT_FOUND" }, { status: 422 });
+    }
+    if (h.startsWith("0xfa") || h.startsWith("0xcc")) {
+      // 0xfa was credited by the worker on call 3; like the real rail, any
+      // later verify reports alreadyCredited instead of double-crediting.
+      const alreadyCredited = h.startsWith("0xfa") && call > 3;
       return Response.json({
         credited: true,
-        alreadyCredited: false,
+        alreadyCredited,
         plan: "pro_monthly",
         userId: body.userId,
         paidThrough: "2027-09-28T00:00:00.000Z",
@@ -66,6 +81,12 @@ const stub = Bun.serve({
     if (h.startsWith("0xee")) {
       return Response.json({ error: "simulated upstream failure" }, { status: 500 });
     }
+    if (h.startsWith("0xfb")) {
+      return Response.json(
+        { error: "payment went to 0xdead…e5D2, not the treasury", code: "WRONG_RECIPIENT" },
+        { status: 422 },
+      );
+    }
     return Response.json({ error: `no receipt for ${h} on avalanche`, code: "TX_NOT_FOUND" }, { status: 422 });
   },
 });
@@ -82,14 +103,21 @@ const api = Bun.spawn(["bun", "run", "src/index.ts"], {
     DATABASE_URL: databaseUrl,
     STRINGZ_PAY_URL: `http://127.0.0.1:${STUB_PORT}`,
     SERVER_PORT: String(API_PORT),
+    // Worker cadence compressed for the check: a queued row lands within one
+    // tick and backoff steps stay sub-second.
+    SETTLE_TICK_MS: "200",
+    SETTLE_BACKOFF_MS: "100",
+    SETTLE_MAX_BACKOFF_MS: "200",
   },
 });
 
-const trpc = async (path: string, input: unknown, cookie?: string) => {
+const trpc = async (path: string, input?: unknown, cookie?: string) => {
+  // Mirrors src/lib/api.ts: mutations POST, no-input queries GET (tRPC v11
+  // rejects POST to query procedures with METHOD_NOT_SUPPORTED).
   const res = await fetch(`http://127.0.0.1:${API_PORT}/trpc/${path}`, {
-    method: "POST",
+    method: input !== undefined ? "POST" : "GET",
     headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
-    body: JSON.stringify(input),
+    ...(input !== undefined ? { body: JSON.stringify(input) } : {}),
   });
   const setCookie = res.headers.get("set-cookie");
   const body = await res.json().catch(() => ({}));
@@ -144,6 +172,69 @@ try {
     missing.status === 200 && md?.outcome === "pending",
     { missing: missing.body, attempts },
   );
+
+  // ── S2b settle-later queue (stringz#62) ──────────────────────────────────
+  // The stub's 0xfa/0xfb hashes stay transient through the request-path retry
+  // budget (TX_NOT_FOUND for the first 2 calls), then turn decisive: 0xfa
+  // confirms, 0xfb proves WRONG_RECIPIENT. The worker must land the credit /
+  // dead-letter with no user retry in between.
+
+  const pg = (await import("pg")).default;
+  const pgClient = new pg.Client({ connectionString: databaseUrl });
+  await pgClient.connect();
+  const settlementRow = async (txHash: string) => {
+    const { rows } = await pgClient.query(
+      "select status, last_error, attempts from payment_settlements where tx_hash = $1",
+      [txHash],
+    );
+    return rows[0] as { status: string; last_error: string | null; attempts: number } | undefined;
+  };
+  const waitForSettlement = async (txHash: string, want: "credited" | "dead", timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const row = await settlementRow(txHash);
+      if (row?.status === want) return row;
+      if (Date.now() > deadline) return row;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  };
+
+  const slowHash = "0xfa" + "55".repeat(31);
+  const slow = await verify(slowHash);
+  const sd = (slow.body as { result?: { data?: Record<string, unknown> } }).result?.data;
+  check("slow payment answers pending, same as before S2b", slow.status === 200 && sd?.outcome === "pending", slow.body);
+  const creditedRow = await waitForSettlement(slowHash, "credited");
+  check(
+    "worker settles the slow payment without a user retry",
+    creditedRow?.status === "credited",
+    creditedRow,
+  );
+  // The entitlements flip itself lives in stringz-pay (it writes
+  // sp_entitlements on credit - pinned by stringz-pay's own api.test.ts), so
+  // this stub harness observes settlement via the queue row, not the tier.
+
+  const badHash = "0xfb" + "66".repeat(31);
+  const bad = await verify(badHash);
+  const bd = (bad.body as { result?: { data?: Record<string, unknown> } }).result?.data;
+  check("late-proving payment also answers pending first", bad.status === 200 && bd?.outcome === "pending", bad.body);
+  const deadRow = await waitForSettlement(badHash, "dead");
+  check(
+    "unpayable tx dead-letters with the coded reason",
+    deadRow?.status === "dead" && deadRow?.last_error === "WRONG_RECIPIENT",
+    deadRow,
+  );
+
+  const requeued = await verify(slowHash);
+  const rq = (requeued.body as { result?: { data?: Record<string, unknown> } }).result?.data;
+  check(
+    "re-verifying an already-settled tx credits instantly, never double-enqueues",
+    requeued.status === 200 && rq?.outcome === "credited" && rq?.alreadyCredited === true,
+    requeued.body,
+  );
+  const duplicateRows = await pgClient.query("select count(*)::int as n from payment_settlements where tx_hash = $1", [slowHash]);
+  check("settlement row stayed unique per (chain, txHash)", duplicateRows.rows[0]?.n === 1, duplicateRows.rows[0]);
+
+  await pgClient.end();
 } finally {
   api.kill();
   stub.stop();

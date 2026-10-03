@@ -57,6 +57,13 @@
       "when": 1790522950292,
       "tag": "0007_ordinary_moon_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791040393349,
+      "tag": "0008_burly_marvel_boy",
+      "breakpoints": true
     }
   ]
 }

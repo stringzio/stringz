@@ -8,6 +8,7 @@ import { db, schema } from "../db/client";
 import { createSession, destroySession, issueNonce, consumeNonce } from "../session";
 import { PLANS } from "../billing";
 import { verifyPaymentWithRetry } from "../stringzPay";
+import { enqueueSettlement } from "../settle";
 import {
   waitlistJoinInput,
   newsletterSubscribeInput,
@@ -245,6 +246,13 @@ export const appRouter = router({
       .input(z.object({ chain: z.string(), txHash: z.string(), plan: z.enum(["pro_monthly", "pro_annual", "team_monthly", "team_annual"]) }))
       .mutation(async ({ input, ctx }): Promise<VerifyPaymentResult> => {
         const result = await verifyPaymentWithRetry({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+        if (result.outcome === "pending") {
+          // The retry budget died before the chain caught up: park the payment
+          // in the settle-later queue so the worker credits it when it
+          // confirms (stringz#62) - the client's entitlements watch stays the
+          // progress signal, nothing more to do here.
+          await enqueueSettlement({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+        }
         console.warn(
           "[billing.verify]",
           result.outcome,
