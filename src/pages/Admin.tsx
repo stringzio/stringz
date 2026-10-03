@@ -175,7 +175,7 @@ export default function Admin() {
         { icon: CreditCard, label: "Paid plans", value: String(stats.users.paid_plans), sub: `${stats.mrr ? `$${stats.mrr.mrrUsd.toFixed(2)} est. MRR` : "rail not linked"}` },
         { icon: Cloud, label: "Cloud runs", value: String(stats.runs.total), sub: `${stats.runs.active} active now` },
         { icon: Activity, label: "Success rate", value: `${successRate}%`, sub: `${stats.runs.last7d} runs last 7d` },
-        { icon: Wallet, label: "Compute cost", value: `$${stats.runs.cost_usd.toFixed(4)}`, sub: "sim runner, all time" },
+        { icon: Wallet, label: "Compute (est.)", value: `$${stats.runs.cost_usd.toFixed(2)}`, sub: "executed runs only" },
         { icon: RefreshCw, label: "Avg run", value: stats.runs.avg_duration_ms ? `${(stats.runs.avg_duration_ms / 1000).toFixed(1)}s` : "—", sub: "cloud runs" },
         { icon: Activity, label: "Local runs", value: String(stats.flowRuns.total), sub: `${stats.flowRuns.last7d} last 7d` },
         { icon: CreditCard, label: "Settlements", value: `${settlementCount("credited")} done`, sub: `${settlementCount("queued")} queued · ${settlementCount("dead")} dead` },
