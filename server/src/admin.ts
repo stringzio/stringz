@@ -211,15 +211,71 @@ adminApp.get("/users", async (c) => {
   return c.json({ total: total.n, users });
 });
 
+adminApp.get("/users/:id", async (c) => {
+  if (!isAuthed(getCookie(c, ADMIN_COOKIE))) return c.json({ ok: false }, 401);
+  const id = c.req.param("id");
+  const user = await one(sql`
+    SELECT u.*, EXISTS(SELECT 1 FROM onboarding o WHERE o.user_id = u.id) AS onboarded
+    FROM users u WHERE u.id = ${id}`);
+  if (!user || Object.keys(user).length === 0) return c.json({ ok: false, error: "not found" }, 404);
+
+  const counts = await one<{ flows: number; local_runs: number; cloud_runs: number }>(sql`
+    SELECT (SELECT count(*) FROM flows WHERE user_id = ${id})::int AS flows,
+      (SELECT count(*) FROM flow_runs WHERE user_id = ${id})::int AS local_runs,
+      (SELECT count(*) FROM simulation_runs WHERE user_id = ${id})::int AS cloud_runs`);
+  const onboarding = await one(sql`SELECT * FROM onboarding WHERE user_id = ${id}`);
+
+  // stringz-pay row when the rail shares this database (null on self-host).
+  let entitlement: Record<string, unknown> | null = null;
+  try {
+    const row = await one(sql`SELECT plan, paid_through, tx_hash FROM sp_entitlements WHERE user_id = ${id}`);
+    if (Object.keys(row).length > 0) entitlement = row;
+  } catch (err) {
+    if (pgErrorCode(err) !== "42P01") throw err;
+  }
+
+  const settlements = await many(sql`
+    SELECT status, chain, tx_hash, plan, attempts, last_error, created_at
+    FROM payment_settlements WHERE user_id = ${id}
+    ORDER BY created_at DESC LIMIT 5`);
+  const recentRuns = await many(sql`
+    SELECT id, status, error_class, duration_ms, cost_est_usd, created_at
+    FROM simulation_runs WHERE user_id = ${id}
+    ORDER BY created_at DESC LIMIT 5`);
+
+  return c.json({ user, counts, onboarding: Object.keys(onboarding).length ? onboarding : null, entitlement, settlements, recentRuns });
+});
+
 adminApp.get("/runs", async (c) => {
   if (!isAuthed(getCookie(c, ADMIN_COOKIE))) return c.json({ ok: false }, 401);
   const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 200);
+  const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
+  const total = await one<{ n: number }>(sql`SELECT count(*)::int AS n FROM simulation_runs`);
   const runs = await many(sql`
     SELECT r.id, r.status, r.error_class, r.duration_ms, r.cost_est_usd, r.created_at,
       u.email AS user_email
     FROM simulation_runs r
     LEFT JOIN users u ON u.id = r.user_id
     ORDER BY r.created_at DESC
-    LIMIT ${limit}`);
-  return c.json({ runs });
+    LIMIT ${limit} OFFSET ${offset}`);
+  return c.json({ total: total.n, runs });
 });
+
+adminApp.get("/runs/:id", async (c) => {
+  if (!isAuthed(getCookie(c, ADMIN_COOKIE))) return c.json({ ok: false }, 401);
+  const id = c.req.param("id");
+  const run = await one(sql`
+    SELECT r.*, u.email AS user_email
+    FROM simulation_runs r
+    LEFT JOIN users u ON u.id = r.user_id
+    WHERE r.id = ${id}`);
+  if (!run || Object.keys(run).length === 0) return c.json({ ok: false, error: "not found" }, 404);
+
+  // The buffered NDJSON event stream, oldest first, capped: the sheet is a
+  // debugging view, not a log archive (the GCS object stays canonical).
+  const eventRows = await many<{ event: string }>(sql`
+    SELECT event FROM simulation_events WHERE run_id = ${id} ORDER BY seq ASC LIMIT 200`);
+  const eventCount = await one<{ n: number }>(sql`SELECT count(*)::int AS n FROM simulation_events WHERE run_id = ${id}`);
+  return c.json({ run, events: eventRows.map((r) => r.event), eventCount: eventCount.n });
+});
+

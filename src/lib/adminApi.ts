@@ -53,6 +53,21 @@ export interface AdminRun {
   user_email: string | null;
 }
 
+export interface AdminUserDetail {
+  user: AdminUser & { avatar: string | null; plan_renewal_at: string | null; plan_provider: string | null; plan_ref: string | null };
+  counts: { flows: number; local_runs: number; cloud_runs: number };
+  onboarding: Record<string, unknown> | null;
+  entitlement: { plan: string; paid_through: string; tx_hash: string } | null;
+  settlements: { status: string; chain: string; tx_hash: string; plan: string; attempts: number; last_error: string | null; created_at: string }[];
+  recentRuns: { id: string; status: string; error_class: string | null; duration_ms: number | null; cost_est_usd: string | null; created_at: string }[];
+}
+
+export interface AdminRunDetail {
+  run: Record<string, unknown> & { id: string; status: string; user_email: string | null };
+  events: string[];
+  eventCount: number;
+}
+
 export const adminApi = {
   session: () => call<{ authed: boolean }>("/session"),
   login: (email: string, password: string) =>
@@ -61,5 +76,8 @@ export const adminApi = {
   stats: () => call<AdminStats>("/stats"),
   users: (limit = 50, offset = 0) =>
     call<{ total: number; users: AdminUser[] }>(`/users?limit=${limit}&offset=${offset}`),
-  runs: (limit = 50) => call<{ runs: AdminRun[] }>(`/runs?limit=${limit}`),
+  userDetail: (id: string) => call<AdminUserDetail>(`/users/${id}`),
+  runs: (limit = 50, offset = 0) =>
+    call<{ total: number; runs: AdminRun[] }>(`/runs?limit=${limit}&offset=${offset}`),
+  runDetail: (id: string) => call<AdminRunDetail>(`/runs/${id}`),
 };
