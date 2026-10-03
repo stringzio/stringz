@@ -226,9 +226,11 @@ adminApp.get("/users/:id", async (c) => {
   const onboarding = await one(sql`SELECT * FROM onboarding WHERE user_id = ${id}`);
 
   // stringz-pay row when the rail shares this database (null on self-host).
+  // sp_entitlements carries only plan + paid_through - the tx hash lives in
+  // the rail's sp_payments table, not here.
   let entitlement: Record<string, unknown> | null = null;
   try {
-    const row = await one(sql`SELECT plan, paid_through, tx_hash FROM sp_entitlements WHERE user_id = ${id}`);
+    const row = await one(sql`SELECT plan, paid_through FROM sp_entitlements WHERE user_id = ${id}`);
     if (Object.keys(row).length > 0) entitlement = row;
   } catch (err) {
     if (pgErrorCode(err) !== "42P01") throw err;
