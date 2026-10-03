@@ -108,6 +108,9 @@ const api = Bun.spawn(["bun", "run", "src/index.ts"], {
     SETTLE_TICK_MS: "200",
     SETTLE_BACKOFF_MS: "100",
     SETTLE_MAX_BACKOFF_MS: "200",
+    // Operator credentials for the admin-dashboard checks.
+    ADMIN_EMAIL: "ops@example.com",
+    ADMIN_PASSWORD: "wirecheck-admin-pass",
   },
 });
 
@@ -170,6 +173,59 @@ try {
     entitlements1.body,
   );
   await pgClient.query("update users set plan = 'community', plan_status = 'active', plan_renewal_at = null where id = $1", [userId]);
+
+  // ── Admin dashboard ───────────────────────────────────────────────────────
+  const adminPost = (path: string, body: unknown, cookie?: string) =>
+    fetch(`http://127.0.0.1:${API_PORT}/admin/api${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+      body: JSON.stringify(body),
+    });
+  const adminGet = (path: string, cookie?: string) =>
+    fetch(`http://127.0.0.1:${API_PORT}/admin/api${path}`, { headers: cookie ? { cookie } : undefined });
+
+  const badLogin = await adminPost("/login", { email: "ops@example.com", password: "wrong" });
+  check("admin login rejects a wrong password", badLogin.status === 401, { status: badLogin.status });
+  const noAuth = await adminGet("/stats");
+  check("admin stats rejects unauthenticated reads", noAuth.status === 401, { status: noAuth.status });
+
+  const goodLogin = await adminPost("/login", { email: "ops@example.com", password: "wirecheck-admin-pass" });
+  const adminCookie = goodLogin.headers.get("set-cookie")?.split(";")[0];
+  check(
+    "admin login succeeds with env credentials + sets a cookie",
+    goodLogin.status === 200 && !!adminCookie,
+    { status: goodLogin.status },
+  );
+
+  const statsRes = await adminGet("/stats", adminCookie);
+  const statsBody = (await statsRes.json().catch(() => ({}))) as {
+    users?: { total?: number };
+    runs?: { total?: number };
+    billingEvents?: number;
+    plans?: unknown[];
+    mrr?: unknown;
+  };
+  check(
+    "admin stats returns the aggregate shape",
+    statsRes.status === 200 &&
+      typeof statsBody.users?.total === "number" &&
+      typeof statsBody.runs?.total === "number" &&
+      typeof statsBody.billingEvents === "number" &&
+      Array.isArray(statsBody.plans),
+    statsBody,
+  );
+
+  const usersRes = await adminGet("/users", adminCookie);
+  const usersBody = (await usersRes.json().catch(() => ({}))) as { users?: unknown[] };
+  check("admin users lists rows", usersRes.status === 200 && Array.isArray(usersBody.users) && usersBody.users.length > 0, usersBody);
+
+  const runsRes = await adminGet("/runs", adminCookie);
+  const runsBody = (await runsRes.json().catch(() => ({}))) as { runs?: unknown[] };
+  check("admin runs endpoint answers", runsRes.status === 200 && Array.isArray(runsBody.runs), runsBody);
+
+  await adminPost("/logout", {}, adminCookie);
+  const afterLogout = await adminGet("/stats", adminCookie);
+  check("admin logout invalidates the session", afterLogout.status === 401, { status: afterLogout.status });
 
   const verify = (txHash: string) =>
     trpc("billing.verify", { chain: "avalanche", txHash, plan: "pro_monthly" }, signup.cookie);

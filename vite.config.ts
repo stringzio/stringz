@@ -16,6 +16,7 @@ export default defineConfig({
       "/trpc": { target: "http://localhost:8787", xfwd: true },
       "/oauth": { target: "http://localhost:8787", xfwd: true },
       "/api": { target: "http://localhost:8787", xfwd: true },
+      "/admin/api": { target: "http://localhost:8787", xfwd: true },
     },
   },
   resolve: {

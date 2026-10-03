@@ -14,6 +14,7 @@ import { oauthApp } from "./oauth";
 import { applyBillingEvent, getProvider } from "./billing";
 import { cloudSimEnabled, verifyDispatchToken, dispatchRun, ingestEvents, readEventsSince, acquireRunNotifier, startStaleSweeper } from "./sim";
 import { startSettlementWorker } from "./settle";
+import { adminApp } from "./admin";
 import { chainId } from "../../src/lib/chainIds";
 
 await migrate(db, { migrationsFolder: resolve(import.meta.dir, "db/migrations") });
@@ -23,6 +24,9 @@ app.use("*", logger());
 app.get("/health", (c) => c.json({ ok: true, service: "flowkit-server" }));
 
 app.route("/oauth", oauthApp);
+
+// Admin monitoring dashboard (operator env credentials; read-only aggregates).
+app.route("/admin/api", adminApp);
 
 // Billing webhooks: raw body (HMAC-verified) from the payment rail.
 app.post("/billing/webhook", async (c) => {

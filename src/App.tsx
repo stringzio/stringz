@@ -9,6 +9,7 @@ import FullLoader from './components/FullLoader'
 // The builder pulls in the wallet stack (wagmi + RainbowKit); load it only on its route.
 const AppRoute = lazy(() => import('./pages/AppRoute'))
 const AuthRoute = lazy(() => import('./pages/AuthRoute'))
+const Admin = lazy(() => import('./pages/Admin'))
 
 export default function App() {
   return (
@@ -26,6 +27,14 @@ export default function App() {
       />
       <Route path="/privacy" element={<Legal doc="privacy" />} />
       <Route path="/terms" element={<Legal doc="terms" />} />
+      <Route
+        path="/admin"
+        element={
+          <Suspense fallback={<FullLoader />}>
+            <Admin />
+          </Suspense>
+        }
+      />
       <Route
         path="/app"
         element={
