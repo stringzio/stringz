@@ -220,8 +220,32 @@ try {
   check("admin users lists rows", usersRes.status === 200 && Array.isArray(usersBody.users) && usersBody.users.length > 0, usersBody);
 
   const runsRes = await adminGet("/runs", adminCookie);
-  const runsBody = (await runsRes.json().catch(() => ({}))) as { runs?: unknown[] };
+  const runsBody = (await runsRes.json().catch(() => ({}))) as { runs?: unknown[]; total?: number };
   check("admin runs endpoint answers", runsRes.status === 200 && Array.isArray(runsBody.runs), runsBody);
+
+  const runsPageRes = await adminGet("/runs?limit=10&offset=0", adminCookie);
+  const runsPageBody = (await runsPageRes.json().catch(() => ({}))) as { runs?: unknown[]; total?: number };
+  check(
+    "admin runs pagination reports a total",
+    runsPageRes.status === 200 && Array.isArray(runsPageBody.runs) && typeof runsPageBody.total === "number",
+    runsPageBody,
+  );
+
+  const userDetailRes = await adminGet(`/users/${userId}`, adminCookie);
+  const userDetailBody = (await userDetailRes.json().catch(() => ({}))) as {
+    user?: { email?: string };
+    counts?: { flows?: number; cloud_runs?: number };
+    recentRuns?: unknown[];
+  };
+  check(
+    "admin user detail returns identity + counts",
+    userDetailRes.status === 200 && userDetailBody.user?.email === (signup.body as { result?: { data?: { email?: string } } }).result?.data?.email &&
+      typeof userDetailBody.counts?.cloud_runs === "number" && Array.isArray(userDetailBody.recentRuns),
+    userDetailBody,
+  );
+
+  const runDetailRes = await adminGet(`/runs/00000000-0000-0000-0000-000000000000`, adminCookie);
+  check("admin run detail 404s on an unknown id", runDetailRes.status === 404, { status: runDetailRes.status });
 
   await adminPost("/logout", {}, adminCookie);
   const afterLogout = await adminGet("/stats", adminCookie);

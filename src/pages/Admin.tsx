@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Lock, LogOut, RefreshCw, Users, Activity, Cloud, CreditCard, Wallet } from "lucide-react";
+import { ChevronLeft, ChevronRight, Lock, LogOut, RefreshCw, Users, Activity, Cloud, CreditCard, Wallet } from "lucide-react";
 import BrandLogo from "../components/BrandLogo";
+import Sheet from "../components/Sheet";
 import Toast, { type ToastData } from "../components/Toast";
-import { adminApi, type AdminStats, type AdminUser, type AdminRun } from "../lib/adminApi";
+import { adminApi, type AdminStats, type AdminUser, type AdminRun, type AdminUserDetail, type AdminRunDetail } from "../lib/adminApi";
 
 function ago(iso: string): string {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -34,6 +35,193 @@ const STATUS_COLOR: Record<string, string> = {
 
 const dot = (status: string) => STATUS_COLOR[status] ?? "bg-gray-300";
 
+const PAGE_SIZE = 15;
+
+/** Pretty-print a buffered NDJSON event for the run-detail sheet, capped so a
+ *  single huge event cannot blow up the sheet. */
+function prettyEvent(raw: string, cap = 1600): string {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const text = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
+    return text.length > cap ? `${text.slice(0, cap)}…` : text;
+  } catch {
+    return raw.length > cap ? `${raw.slice(0, cap)}…` : raw;
+  }
+}
+
+function Pagination({ page, total, onPage }: { page: number; total: number; onPage: (p: number) => void }) {
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const to = Math.min(total, (page + 1) * PAGE_SIZE);
+  return (
+    <div className="flex items-center justify-between border-t border-gray-50 px-5 py-3">
+      <span className="text-[11.5px] font-medium text-gray-400">
+        {from}–{to} of {total}
+      </span>
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => onPage(page - 1)}
+          disabled={page === 0}
+          className="flex h-8 items-center gap-1 rounded-full bg-gray-50 px-3 text-[11.5px] font-bold text-[#1a1a1a] transition active:scale-95 disabled:opacity-30"
+        >
+          <ChevronLeft size={13} /> Newer
+        </button>
+        <span className="text-[11px] font-semibold text-gray-400">{page + 1}/{pages}</span>
+        <button
+          onClick={() => onPage(page + 1)}
+          disabled={page >= pages - 1}
+          className="flex h-8 items-center gap-1 rounded-full bg-gray-50 px-3 text-[11.5px] font-bold text-[#1a1a1a] transition active:scale-95 disabled:opacity-30"
+        >
+          Older <ChevronRight size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-gray-50 py-2.5 last:border-0">
+      <span className="shrink-0 text-[11.5px] font-semibold text-gray-400">{label}</span>
+      <span className={`break-all text-right text-[12.5px] font-semibold text-[#1a1a1a] ${mono ? "font-mono text-[11.5px]" : ""}`}>
+        {value ?? "—"}
+      </span>
+    </div>
+  );
+}
+
+function UserDetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const [detail, setDetail] = useState<AdminUserDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    adminApi.userDetail(id).then(setDetail).catch((e) => setError(e instanceof Error ? e.message : "Load failed"));
+  }, [id]);
+
+  return (
+    <Sheet open onClose={onClose} title="User detail">
+      {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[12.5px] font-medium text-rose-600">{error}</p>}
+      {!detail && !error && <div className="py-6 text-center text-[13px] font-medium text-gray-400">Loading…</div>}
+      {detail && (
+        <div className="pb-2">
+          <div className="mb-2 flex items-center gap-3">
+            {detail.user.avatar ? (
+              <img src={detail.user.avatar} alt="" className="h-11 w-11 rounded-full object-cover ring-1 ring-black/[0.06]" />
+            ) : (
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-[15px] font-extrabold text-gray-500">
+                {(detail.user.name ?? detail.user.email ?? "?").slice(0, 1).toUpperCase()}
+              </span>
+            )}
+            <div>
+              <div className="text-[15px] font-extrabold text-[#1a1a1a]">{detail.user.name ?? "Unnamed"}</div>
+              <div className="text-[12px] text-gray-400">{detail.user.email ?? detail.user.wallet_address ?? "no contact"}</div>
+            </div>
+          </div>
+
+          <Field label="ID" value={detail.user.id} mono />
+          <Field label="Wallet" value={detail.user.wallet_address} mono />
+          <Field label="Plan" value={`${detail.user.plan} (${detail.user.plan_status})`} />
+          <Field label="Renewal" value={detail.user.plan_renewal_at ? `${ago(detail.user.plan_renewal_at)} (${detail.user.plan_renewal_at})` : null} mono={!!detail.user.plan_renewal_at} />
+          <Field label="Rail entitlement" value={detail.entitlement ? `${detail.entitlement.plan} through ${detail.entitlement.paid_through}` : "none"} />
+          <Field label="Onboarded" value={detail.onboarding ? "yes" : "no"} />
+          {detail.onboarding && (
+            <Field
+              label="Onboarding"
+              value={`${String(detail.onboarding.role ?? "?")} · heard via ${String(detail.onboarding.heard_from ?? "?")} · newsletter ${detail.onboarding.newsletter ? "yes" : "no"}`}
+            />
+          )}
+          <Field label="Saved flows" value={String(detail.counts.flows)} />
+          <Field label="Local runs" value={String(detail.counts.local_runs)} />
+          <Field label="Cloud runs" value={String(detail.counts.cloud_runs)} />
+          <Field label="Joined" value={detail.user.created_at} mono />
+
+          {detail.settlements.length > 0 && (
+            <div className="mt-3">
+              <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Payments</h4>
+              {detail.settlements.map((s) => (
+                <div key={s.tx_hash} className="flex items-center justify-between border-b border-gray-50 py-2 last:border-0">
+                  <span className="flex items-center gap-1.5 text-[12px] font-semibold capitalize text-gray-600">
+                    <span className={`h-2 w-2 rounded-full ${dot(s.status)}`} />
+                    {s.plan} · {s.status}
+                  </span>
+                  <span className="font-mono text-[10.5px] text-gray-400">{s.tx_hash.slice(0, 12)}…</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {detail.recentRuns.length > 0 && (
+            <div className="mt-3">
+              <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Recent cloud runs</h4>
+              {detail.recentRuns.map((r) => (
+                <div key={r.id} className="flex items-center justify-between border-b border-gray-50 py-2 last:border-0">
+                  <span className="flex items-center gap-1.5 text-[12px] font-semibold capitalize text-gray-600">
+                    <span className={`h-2 w-2 rounded-full ${dot(r.status)}`} />
+                    {r.status}
+                  </span>
+                  <span className="text-[11px] text-gray-400">{ago(r.created_at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function RunDetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const [detail, setDetail] = useState<AdminRunDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    adminApi.runDetail(id).then(setDetail).catch((e) => setError(e instanceof Error ? e.message : "Load failed"));
+  }, [id]);
+
+  const run = detail?.run;
+
+  return (
+    <Sheet open onClose={onClose} title="Process detail">
+      {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[12.5px] font-medium text-rose-600">{error}</p>}
+      {!detail && !error && <div className="py-6 text-center text-[13px] font-medium text-gray-400">Loading…</div>}
+      {run && (
+        <div className="pb-2">
+          <Field label="Run ID" value={String(run.id)} mono />
+          <Field label="User" value={run.user_email ?? "—"} />
+          <Field label="Status" value={String(run.status)} />
+          <Field label="Error class" value={run.error_class ? String(run.error_class) : null} />
+          <Field label="Created" value={String(run.created_at)} mono />
+          <Field label="Started" value={run.started_at ? String(run.started_at) : null} mono />
+          <Field label="Duration" value={run.duration_ms ? `${(Number(run.duration_ms) / 1000).toFixed(1)}s` : null} />
+          <Field label="Est. cost" value={run.cost_est_usd ? `$${Number(run.cost_est_usd).toFixed(4)}` : null} />
+          <Field label="Source" value={run.src_gcs_uri ? String(run.src_gcs_uri) : null} mono />
+          <Field label="Execution" value={run.execution_name ? String(run.execution_name) : null} mono />
+
+          {typeof run.result === "string" && run.result && (
+            <div className="mt-3">
+              <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Result</h4>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-gray-50 p-3 font-mono text-[11px] text-[#1a1a1a]">
+                {prettyEvent(run.result, 1200)}
+              </pre>
+            </div>
+          )}
+
+          <div className="mt-3">
+            <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">
+              Event stream{detail && detail.eventCount > detail.events.length ? ` (first ${detail.events.length} of ${detail.eventCount})` : ""}
+            </h4>
+            {detail!.events.length === 0 ? (
+              <p className="text-[12px] text-gray-400">No buffered events.</p>
+            ) : (
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-gray-50 p-3 font-mono text-[11px] text-[#1a1a1a]">
+                {detail!.events.map((e) => prettyEvent(e)).join("\n")}
+              </pre>
+            )}
+          </div>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
 /** Operator monitoring dashboard: users, cloud processes, resource cost,
  *  settlements and a revenue estimate. Read-only; separate admin session. */
 export default function Admin() {
@@ -44,7 +232,13 @@ export default function Admin() {
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersPage, setUsersPage] = useState(0);
   const [runs, setRuns] = useState<AdminRun[]>([]);
+  const [runsTotal, setRunsTotal] = useState(0);
+  const [runsPage, setRunsPage] = useState(0);
+  const [openUser, setOpenUser] = useState<string | null>(null);
+  const [openRun, setOpenRun] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -54,11 +248,16 @@ export default function Admin() {
     toastTimer.current = setTimeout(() => setToast(null), 2200);
   };
 
-  const load = useCallback(async () => {
-    const [s, u, r] = await Promise.all([adminApi.stats(), adminApi.users(30), adminApi.runs(30)]);
-    setStats(s);
-    setUsers(u.users);
+  const loadStats = useCallback(async () => setStats(await adminApi.stats()), []);
+  const loadUsers = useCallback(async (page: number) => {
+    const r = await adminApi.users(PAGE_SIZE, page * PAGE_SIZE);
+    setUsers(r.users);
+    setUsersTotal(r.total);
+  }, []);
+  const loadRuns = useCallback(async (page: number) => {
+    const r = await adminApi.runs(PAGE_SIZE, page * PAGE_SIZE);
     setRuns(r.runs);
+    setRunsTotal(r.total);
   }, []);
 
   useEffect(() => {
@@ -66,17 +265,28 @@ export default function Admin() {
       .session()
       .then(async (s) => {
         setAuthed(s.authed);
-        if (s.authed) await load().catch(() => showToast("Could not load stats"));
+        if (s.authed) {
+          await Promise.all([loadStats(), loadUsers(0), loadRuns(0)]).catch(() => showToast("Could not load stats"));
+        }
       })
       .catch(() => setAuthed(false));
-  }, [load]);
+  }, [loadStats, loadUsers, loadRuns]);
 
-  // Auto-refresh while logged in.
+  // Auto-refresh stats while logged in (tables keep their loaded page).
   useEffect(() => {
     if (!authed) return;
-    const t = setInterval(() => load().catch(() => undefined), 60_000);
+    const t = setInterval(() => loadStats().catch(() => undefined), 60_000);
     return () => clearInterval(t);
-  }, [authed, load]);
+  }, [authed, loadStats]);
+
+  const gotoUsersPage = (p: number) => {
+    setUsersPage(p);
+    loadUsers(p).catch(() => showToast("Could not load users"));
+  };
+  const gotoRunsPage = (p: number) => {
+    setRunsPage(p);
+    loadRuns(p).catch(() => showToast("Could not load runs"));
+  };
 
   const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,7 +295,9 @@ export default function Admin() {
     try {
       await adminApi.login(email, password);
       setAuthed(true);
-      await load();
+      setUsersPage(0);
+      setRunsPage(0);
+      await Promise.all([loadStats(), loadUsers(0), loadRuns(0)]);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -183,8 +395,10 @@ export default function Admin() {
     : [];
 
   return (
+    // fixed inset-0 (not min-h-screen) so the detail Sheets anchor to the
+    // viewport bottom instead of the bottom of a long scrolled page.
     <div
-      className="relative min-h-screen bg-white"
+      className="fixed inset-0 overflow-y-auto bg-white"
       style={{ backgroundImage: "radial-gradient(#e5eae5 1.3px, transparent 1.3px)", backgroundSize: "20px 20px" }}
     >
       <div className="mx-auto max-w-[1080px] px-5 pb-24 pt-8">
@@ -193,7 +407,9 @@ export default function Admin() {
           <BrandLogo />
           <div className="flex items-center gap-2">
             <button
-              onClick={() => load().catch(() => showToast("Refresh failed"))}
+              onClick={() =>
+                Promise.all([loadStats(), loadUsers(usersPage), loadRuns(runsPage)]).catch(() => showToast("Refresh failed"))
+              }
               className="flex h-10 w-10 items-center justify-center rounded-full bg-white ring-1 ring-black/[0.06] transition active:scale-95"
               aria-label="Refresh"
             >
@@ -209,7 +425,7 @@ export default function Admin() {
         </div>
 
         <h1 className="mt-8 text-[28px] font-extrabold tracking-tight text-[#1a1a1a]">Operations</h1>
-        <p className="mt-1 text-[12.5px] text-gray-400">Live view of users, processes and spend. Refreshes every 60s.</p>
+        <p className="mt-1 text-[12.5px] text-gray-400">Live view of users, processes and spend. Stats refresh every 60s. Tap a row for full detail.</p>
 
         {!stats ? (
           <div className="mt-16 text-center text-[13.5px] font-medium text-gray-400">Reading stats…</div>
@@ -270,10 +486,10 @@ export default function Admin() {
               className="mt-4 overflow-hidden rounded-[24px] bg-white ring-1 ring-black/[0.05]"
             >
               <div className="flex items-center justify-between px-5 pt-5">
-                <h3 className="text-[15px] font-extrabold text-[#1a1a1a]">Recent users</h3>
-                <span className="rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-bold text-gray-500">newest 30</span>
+                <h3 className="text-[15px] font-extrabold text-[#1a1a1a]">Users</h3>
+                <span className="rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-bold text-gray-500">{usersTotal} total</span>
               </div>
-              <div className="no-scrollbar mt-3 overflow-x-auto pb-3">
+              <div className="no-scrollbar mt-3 overflow-x-auto">
                 <table className="w-full min-w-[640px] text-left">
                   <thead>
                     <tr className="border-y border-gray-50 text-[10.5px] font-bold uppercase tracking-wide text-gray-400">
@@ -285,9 +501,13 @@ export default function Admin() {
                   </thead>
                   <tbody>
                     {users.map((u) => (
-                      <tr key={u.id} className="border-b border-gray-50 last:border-0">
+                      <tr
+                        key={u.id}
+                        onClick={() => setOpenUser(u.id)}
+                        className="cursor-pointer border-b border-gray-50 transition last:border-0 hover:bg-gray-50/70"
+                      >
                         <td className="px-5 py-3">
-                          <div className="text-[13px] font-bold text-[#1a1a1a]">{u.name ?? u.email ?? u.wallet_address ?? "—"}</div>
+                          <div className="text-[13px] font-bold text-[#1a1a1a]">{u.name ?? u.email ?? "—"}</div>
                           <div className="text-[11px] text-gray-400">{u.email ?? u.wallet_address ?? u.id.slice(0, 8)}</div>
                         </td>
                         <td className="px-3 py-3">
@@ -302,6 +522,7 @@ export default function Admin() {
                   </tbody>
                 </table>
               </div>
+              <Pagination page={usersPage} total={usersTotal} onPage={gotoUsersPage} />
             </motion.div>
 
             {/* runs table */}
@@ -312,10 +533,10 @@ export default function Admin() {
               className="mt-4 overflow-hidden rounded-[24px] bg-white ring-1 ring-black/[0.05]"
             >
               <div className="flex items-center justify-between px-5 pt-5">
-                <h3 className="text-[15px] font-extrabold text-[#1a1a1a]">Recent cloud processes</h3>
-                <span className="rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-bold text-gray-500">newest 30</span>
+                <h3 className="text-[15px] font-extrabold text-[#1a1a1a]">Cloud processes</h3>
+                <span className="rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-bold text-gray-500">{runsTotal} total</span>
               </div>
-              <div className="no-scrollbar mt-3 overflow-x-auto pb-3">
+              <div className="no-scrollbar mt-3 overflow-x-auto">
                 <table className="w-full min-w-[640px] text-left">
                   <thead>
                     <tr className="border-y border-gray-50 text-[10.5px] font-bold uppercase tracking-wide text-gray-400">
@@ -336,7 +557,11 @@ export default function Admin() {
                       </tr>
                     )}
                     {runs.map((r) => (
-                      <tr key={r.id} className="border-b border-gray-50 last:border-0">
+                      <tr
+                        key={r.id}
+                        onClick={() => setOpenRun(r.id)}
+                        className="cursor-pointer border-b border-gray-50 transition last:border-0 hover:bg-gray-50/70"
+                      >
                         <td className="px-5 py-3 font-mono text-[11.5px] font-semibold text-[#1a1a1a]">{r.id.slice(0, 8)}</td>
                         <td className="px-3 py-3 text-[12px] font-medium text-gray-500">{r.user_email ?? "—"}</td>
                         <td className="px-3 py-3">
@@ -357,10 +582,14 @@ export default function Admin() {
                   </tbody>
                 </table>
               </div>
+              <Pagination page={runsPage} total={runsTotal} onPage={gotoRunsPage} />
             </motion.div>
           </>
         )}
       </div>
+
+      {openUser && <UserDetailSheet id={openUser} onClose={() => setOpenUser(null)} />}
+      {openRun && <RunDetailSheet id={openRun} onClose={() => setOpenRun(null)} />}
       <Toast toast={toast} />
     </div>
   );
