@@ -12,7 +12,7 @@ import { db, schema } from "./db/client";
 import { getSessionUser, SESSION_COOKIE } from "./session";
 import { oauthApp } from "./oauth";
 import { applyBillingEvent, getProvider } from "./billing";
-import { cloudSimEnabled, verifyDispatchToken, dispatchRun, ingestEvents, readEventsSince, acquireRunNotifier } from "./sim";
+import { cloudSimEnabled, verifyDispatchToken, dispatchRun, ingestEvents, readEventsSince, acquireRunNotifier, startStaleSweeper } from "./sim";
 import { chainId } from "../../src/lib/chainIds";
 
 await migrate(db, { migrationsFolder: resolve(import.meta.dir, "db/migrations") });
@@ -221,4 +221,7 @@ if (process.env.STATIC_DIR) {
 }
 
 serve({ fetch: app.fetch, port });
+// Teardown must not depend on a client polling the run: close stale rows
+// (kill execution, purge secrets, free the inflight slot) every minute.
+startStaleSweeper();
 console.log(`[flowkit-server] listening on http://localhost:${port} (db: postgres ${process.env.DATABASE_URL ? "configured" : "MISSING DATABASE_URL"}, static: ${process.env.STATIC_DIR ?? "off"})`);

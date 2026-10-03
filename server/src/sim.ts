@@ -549,7 +549,51 @@ export async function reconcileRun(row: SimulationRunRow): Promise<{ row: Simula
   if (TERMINAL_STATUSES.has(row.status)) {
     return { row, events: await loadEvents(row.id) };
   }
+  // Queued rows whose task never dispatched (lost task, client went away)
+  // age out on the same 15-minute clock - otherwise they hold one of the
+  // user's inflight slots forever.
+  if (row.status === "queued" && Date.now() - new Date(row.updatedAt).getTime() > STALE_RUNNING_MS) {
+    const patch = { status: "failed" as const, errorClass: "stale", durationMs: 0, costEstUsd: costEstimateFor(0), updatedAt: now };
+    const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
+    void deleteRunSecrets(row.id);
+    return { row: updated ?? { ...row, ...patch }, events: [] };
+  }
   return { row, events: [] };
+}
+
+/** Reconciliation is lazy - driven by whoever polls a run. A client that
+ *  goes away mid-run (tab closed, e2e that never follows up) leaves the row
+ *  non-terminal forever: it keeps consuming one of the user's 3 inflight
+ *  slots and, for secret-bearing runs, leaves the run-scoped secrets object
+ *  in GCS. A periodic sweep applies the same 15-minute stale rule so
+ *  teardown never depends on a poller showing up. Idempotent; the sweep on
+ *  boot also clears residue from before the sweeper existed. */
+let staleSweepTimer: ReturnType<typeof setInterval> | null = null;
+export function startStaleSweeper(intervalMs = 60_000): void {
+  if (staleSweepTimer) return;
+  let ticking = false;
+  const sweep = async () => {
+    if (ticking) return;
+    ticking = true;
+    try {
+      const cutoff = new Date(Date.now() - STALE_RUNNING_MS).toISOString();
+      const stale = await db
+        .select()
+        .from(schema.simulationRuns)
+        .where(and(
+          sql`${schema.simulationRuns.status} in ('queued', 'running')`,
+          sql`${schema.simulationRuns.updatedAt} < ${cutoff}`,
+        ));
+      for (const row of stale) await reconcileRun(row);
+      if (stale.length > 0) console.log(`[sim] stale sweep: closed ${stale.length} run(s)`);
+    } catch (err) {
+      console.error("[sim] stale sweep failed:", err);
+    } finally {
+      ticking = false;
+    }
+  };
+  staleSweepTimer = setInterval(() => void sweep(), intervalMs);
+  void sweep();
 }
 
 // ── Phase 2: live event stream (ingest + fan-out) ────────────────────────────
