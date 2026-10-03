@@ -8,11 +8,16 @@ import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 
-export type Plan = "community" | "pro";
+export type Plan = "community" | "pro" | "team";
 
 export const PLANS: Record<Plan, { savedFlows: number; label: string }> = {
   community: { savedFlows: 3, label: "Community" },
   pro: { savedFlows: 250, label: "Pro" },
+  // Team is purchasable on the rail (stringz-pay plans.ts) and accepted by
+  // billing.verify's input enum, but the checkout UI does not offer it yet.
+  // Until org features land it carries Pro-style limits - it must exist here
+  // so a team-tier save does not crash on an undefined record.
+  team: { savedFlows: 250, label: "Team" },
 };
 
 export interface CheckoutInput {

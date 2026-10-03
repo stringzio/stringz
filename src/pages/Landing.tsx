@@ -15,6 +15,7 @@ import { SERVICES } from "../data/services";
 import { api } from "../lib/api";
 import Toast, { type ToastData } from "../components/Toast";
 import { PLANS, FEATURE_ROWS, usd } from "../lib/pricing";
+import { SUPPORT_X_URL } from "../lib/support";
 
 /* ---------------- helpers ---------------- */
 
@@ -61,10 +62,10 @@ function Nav() {
         </a>
       </nav>
       <Link
-        to="/waitlist"
+        to="/app"
         className="flex items-center gap-2 rounded-full bg-[#171717] px-5 py-3 text-[13.5px] font-semibold text-white transition hover:scale-[1.02] active:scale-95"
       >
-        Join the waitlist <ArrowRight size={14} />
+        Start building <ArrowRight size={14} />
       </Link>
     </header>
   );
@@ -114,10 +115,10 @@ function Hero() {
           className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center"
         >
           <Link
-            to="/waitlist"
+            to="/app"
             className="flex w-full items-center justify-center gap-2 rounded-full bg-[#171717] px-7 py-3.5 text-[14px] font-semibold text-white transition hover:scale-[1.02] active:scale-95 sm:w-auto"
           >
-            Join the waitlist <ArrowRight size={15} />
+            Start building <ArrowRight size={15} />
           </Link>
           <Link
             to="/auth"
@@ -455,10 +456,10 @@ function Features() {
             you're approved.
           </p>
           <Link
-            to="/waitlist"
+            to="/app"
             className="mt-6 flex w-fit items-center gap-2 rounded-full bg-[#B9D3A8] px-5 py-2.5 text-[12.5px] font-bold text-[#171717] transition hover:scale-[1.03] active:scale-95"
           >
-            Get early access <ArrowRight size={13} />
+            Start building <ArrowRight size={13} />
           </Link>
         </motion.div>
       </div>
@@ -851,12 +852,23 @@ function Footer() {
                 <ul className="mt-4 space-y-2.5">
                   {c.links.map((l) => (
                     <li key={l}>
-                      <a
-                        href="#top"
-                        className="text-[12.5px] text-[#7a7a74] transition hover:text-[#171717]"
-                      >
-                        {l}
-                      </a>
+                      {l === "Contact" ? (
+                        <a
+                          href={SUPPORT_X_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[12.5px] text-[#7a7a74] transition hover:text-[#171717]"
+                        >
+                          {l} (X DM)
+                        </a>
+                      ) : (
+                        <a
+                          href="#top"
+                          className="text-[12.5px] text-[#7a7a74] transition hover:text-[#171717]"
+                        >
+                          {l}
+                        </a>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -869,6 +881,9 @@ function Footer() {
             © 2026 Stringz. All rights reserved. Tooling only — never custody.
           </span>
           <span className="flex gap-6">
+            <a href={SUPPORT_X_URL} target="_blank" rel="noreferrer" className="hover:text-[#171717]">
+              X (Twitter)
+            </a>
             <a href="/terms" className="hover:text-[#171717]">
               Terms of service
             </a>
