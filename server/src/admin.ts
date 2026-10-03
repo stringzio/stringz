@@ -150,7 +150,10 @@ adminApp.get("/stats", async (c) => {
       count(*) FILTER (WHERE status IN ('queued', 'running'))::int AS active,
       count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
       count(*) FILTER (WHERE status = 'failed')::int AS failed,
-      coalesce(sum(cost_est_usd), 0)::float AS cost_usd,
+      -- Stale rows closed by the sweeper carry full wall time (days of queue
+      -- time, not compute) - exclude them so the card reads as executed
+      -- compute, not elapsed time.
+      coalesce(sum(cost_est_usd) FILTER (WHERE error_class IS DISTINCT FROM 'stale'), 0)::float AS cost_usd,
       coalesce(avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL), 0)::float AS avg_duration_ms
     FROM simulation_runs`);
   const runStatuses = await many(sql`SELECT status, count(*)::int AS n FROM simulation_runs GROUP BY status ORDER BY n DESC`);
