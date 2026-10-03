@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Lock, LogOut, RefreshCw, Users, Activity, Cloud, CreditCard, Wallet } from "lucide-react";
 import BrandLogo from "../components/BrandLogo";
-import Sheet from "../components/Sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import Toast, { type ToastData } from "../components/Toast";
 import { adminApi, type AdminStats, type AdminUser, type AdminRun, type AdminUserDetail, type AdminRunDetail } from "../lib/adminApi";
 
@@ -98,24 +98,29 @@ function UserDetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
   }, [id]);
 
   return (
-    <Sheet open onClose={onClose} title="User detail">
-      {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[12.5px] font-medium text-rose-600">{error}</p>}
-      {!detail && !error && <div className="py-6 text-center text-[13px] font-medium text-gray-400">Loading…</div>}
-      {detail && (
-        <div className="pb-2">
-          <div className="mb-2 flex items-center gap-3">
-            {detail.user.avatar ? (
-              <img src={detail.user.avatar} alt="" className="h-11 w-11 rounded-full object-cover ring-1 ring-black/[0.06]" />
-            ) : (
-              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-[15px] font-extrabold text-gray-500">
-                {(detail.user.name ?? detail.user.email ?? "?").slice(0, 1).toUpperCase()}
-              </span>
-            )}
-            <div>
-              <div className="text-[15px] font-extrabold text-[#1a1a1a]">{detail.user.name ?? "Unnamed"}</div>
-              <div className="text-[12px] text-gray-400">{detail.user.email ?? detail.user.wallet_address ?? "no contact"}</div>
-            </div>
-          </div>
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+        <SheetHeader className="px-5 pt-5">
+          <SheetTitle className="text-[17px] font-extrabold tracking-tight text-[#1a1a1a]">User detail</SheetTitle>
+        </SheetHeader>
+        <div className="px-5 pb-8">
+          {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[12.5px] font-medium text-rose-600">{error}</p>}
+          {!detail && !error && <div className="py-6 text-center text-[13px] font-medium text-gray-400">Loading…</div>}
+          {detail && (
+            <>
+              <div className="mb-2 flex items-center gap-3">
+                {detail.user.avatar ? (
+                  <img src={detail.user.avatar} alt="" className="h-11 w-11 rounded-full object-cover ring-1 ring-black/[0.06]" />
+                ) : (
+                  <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-[15px] font-extrabold text-gray-500">
+                    {(detail.user.name ?? detail.user.email ?? "?").slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                <div>
+                  <div className="text-[15px] font-extrabold text-[#1a1a1a]">{detail.user.name ?? "Unnamed"}</div>
+                  <div className="text-[12px] text-gray-400">{detail.user.email ?? detail.user.wallet_address ?? "no contact"}</div>
+                </div>
+              </div>
 
           <Field label="ID" value={detail.user.id} mono />
           <Field label="Wallet" value={detail.user.wallet_address} mono />
@@ -149,22 +154,24 @@ function UserDetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
             </div>
           )}
 
-          {detail.recentRuns.length > 0 && (
-            <div className="mt-3">
-              <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Recent cloud runs</h4>
-              {detail.recentRuns.map((r) => (
-                <div key={r.id} className="flex items-center justify-between border-b border-gray-50 py-2 last:border-0">
-                  <span className="flex items-center gap-1.5 text-[12px] font-semibold capitalize text-gray-600">
-                    <span className={`h-2 w-2 rounded-full ${dot(r.status)}`} />
-                    {r.status}
-                  </span>
-                  <span className="text-[11px] text-gray-400">{ago(r.created_at)}</span>
+              {detail.recentRuns.length > 0 && (
+                <div className="mt-3">
+                  <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Recent cloud runs</h4>
+                  {detail.recentRuns.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between border-b border-gray-50 py-2 last:border-0">
+                      <span className="flex items-center gap-1.5 text-[12px] font-semibold capitalize text-gray-600">
+                        <span className={`h-2 w-2 rounded-full ${dot(r.status)}`} />
+                        {r.status}
+                      </span>
+                      <span className="text-[11px] text-gray-400">{ago(r.created_at)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
-      )}
+      </SheetContent>
     </Sheet>
   );
 }
@@ -179,45 +186,52 @@ function RunDetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const run = detail?.run;
 
   return (
-    <Sheet open onClose={onClose} title="Process detail">
-      {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[12.5px] font-medium text-rose-600">{error}</p>}
-      {!detail && !error && <div className="py-6 text-center text-[13px] font-medium text-gray-400">Loading…</div>}
-      {run && (
-        <div className="pb-2">
-          <Field label="Run ID" value={String(run.id)} mono />
-          <Field label="User" value={run.user_email ?? "—"} />
-          <Field label="Status" value={String(run.status)} />
-          <Field label="Error class" value={run.error_class ? String(run.error_class) : null} />
-          <Field label="Created" value={String(run.created_at)} mono />
-          <Field label="Started" value={run.started_at ? String(run.started_at) : null} mono />
-          <Field label="Duration" value={run.duration_ms ? `${(Number(run.duration_ms) / 1000).toFixed(1)}s` : null} />
-          <Field label="Est. cost" value={run.cost_est_usd ? `$${Number(run.cost_est_usd).toFixed(4)}` : null} />
-          <Field label="Source" value={run.src_gcs_uri ? String(run.src_gcs_uri) : null} mono />
-          <Field label="Execution" value={run.execution_name ? String(run.execution_name) : null} mono />
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+        <SheetHeader className="px-5 pt-5">
+          <SheetTitle className="text-[17px] font-extrabold tracking-tight text-[#1a1a1a]">Process detail</SheetTitle>
+        </SheetHeader>
+        <div className="px-5 pb-8">
+          {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[12.5px] font-medium text-rose-600">{error}</p>}
+          {!detail && !error && <div className="py-6 text-center text-[13px] font-medium text-gray-400">Loading…</div>}
+          {run && (
+            <>
+              <Field label="Run ID" value={String(run.id)} mono />
+              <Field label="User" value={run.user_email ?? "—"} />
+              <Field label="Status" value={String(run.status)} />
+              <Field label="Error class" value={run.error_class ? String(run.error_class) : null} />
+              <Field label="Created" value={String(run.created_at)} mono />
+              <Field label="Started" value={run.started_at ? String(run.started_at) : null} mono />
+              <Field label="Duration" value={run.duration_ms ? `${(Number(run.duration_ms) / 1000).toFixed(1)}s` : null} />
+              <Field label="Est. cost" value={run.cost_est_usd ? `$${Number(run.cost_est_usd).toFixed(4)}` : null} />
+              <Field label="Source" value={run.src_gcs_uri ? String(run.src_gcs_uri) : null} mono />
+              <Field label="Execution" value={run.execution_name ? String(run.execution_name) : null} mono />
 
-          {typeof run.result === "string" && run.result && (
-            <div className="mt-3">
-              <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Result</h4>
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-gray-50 p-3 font-mono text-[11px] text-[#1a1a1a]">
-                {prettyEvent(run.result, 1200)}
-              </pre>
-            </div>
+              {typeof run.result === "string" && run.result && (
+                <div className="mt-3">
+                  <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">Result</h4>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-gray-50 p-3 font-mono text-[11px] text-[#1a1a1a]">
+                    {prettyEvent(run.result, 1200)}
+                  </pre>
+                </div>
+              )}
+
+              <div className="mt-3">
+                <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">
+                  Event stream{detail && detail.eventCount > detail.events.length ? ` (first ${detail.events.length} of ${detail.eventCount})` : ""}
+                </h4>
+                {detail!.events.length === 0 ? (
+                  <p className="text-[12px] text-gray-400">No buffered events.</p>
+                ) : (
+                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-gray-50 p-3 font-mono text-[11px] text-[#1a1a1a]">
+                    {detail!.events.map((e) => prettyEvent(e)).join("\n")}
+                  </pre>
+                )}
+              </div>
+            </>
           )}
-
-          <div className="mt-3">
-            <h4 className="mb-1 text-[12px] font-extrabold uppercase tracking-wide text-gray-400">
-              Event stream{detail && detail.eventCount > detail.events.length ? ` (first ${detail.events.length} of ${detail.eventCount})` : ""}
-            </h4>
-            {detail!.events.length === 0 ? (
-              <p className="text-[12px] text-gray-400">No buffered events.</p>
-            ) : (
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-gray-50 p-3 font-mono text-[11px] text-[#1a1a1a]">
-                {detail!.events.map((e) => prettyEvent(e)).join("\n")}
-              </pre>
-            )}
-          </div>
         </div>
-      )}
+      </SheetContent>
     </Sheet>
   );
 }
@@ -395,10 +409,10 @@ export default function Admin() {
     : [];
 
   return (
-    // fixed inset-0 (not min-h-screen) so the detail Sheets anchor to the
-    // viewport bottom instead of the bottom of a long scrolled page.
+    // The detail sheets portal to body (shadcn/Radix), so normal document
+    // scrolling is fine here - no fixed-height container needed.
     <div
-      className="fixed inset-0 overflow-y-auto bg-white"
+      className="relative min-h-screen bg-white"
       style={{ backgroundImage: "radial-gradient(#e5eae5 1.3px, transparent 1.3px)", backgroundSize: "20px 20px" }}
     >
       <div className="mx-auto max-w-[1080px] px-5 pb-24 pt-8">
