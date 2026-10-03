@@ -78,6 +78,26 @@ export const billingEvents = pgTable("billing_events", {
   createdAt: text("created_at").notNull(),
 }, (t) => [index("billing_events_user_idx").on(t.userId)]);
 
+/** S2b (stringz#62): durable settle-later queue. When billing.verify's retry
+ *  budget is exhausted the server answers "pending" and parks the payment
+ *  here; the settlement worker re-invokes the rail with backoff until the
+ *  payment credits or proves unpayable (then dead-letters with the reason).
+ *  The (chain, tx_hash) unique index makes enqueue idempotent, so a user
+ *  retrying while a row is queued never duplicates work. */
+export const paymentSettlements = pgTable("payment_settlements", {
+  id: text("id").primaryKey(), // crypto.randomUUID()
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  chain: text("chain").notNull(),
+  txHash: text("tx_hash").notNull(),
+  plan: text("plan").notNull(), // pro_monthly | pro_annual | team_monthly | team_annual
+  status: text("status").notNull().default("queued"), // queued | processing | credited | dead
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"), // coded rail rejection or final dead-letter reason
+  nextAttemptAt: text("next_attempt_at").notNull(), // ISO; worker picks due rows only
+  createdAt: text("created_at").notNull(), // ISO
+  updatedAt: text("updated_at").notNull(), // ISO
+}, (t) => [uniqueIndex("payment_settlements_tx_unique").on(t.chain, t.txHash)]);
+
 // ── run tracking + onboarding (v0.2) ────────────────────────────────────────
 
 /** One executed canvas run. Recorded by the client after Run finishes. */
