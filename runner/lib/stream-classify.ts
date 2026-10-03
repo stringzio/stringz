@@ -48,12 +48,21 @@ export function loadSecretValues(file: string | undefined): string[] {
 }
 
 /**
+ * The CLI's self-update banner ("Update available! ..." / "Run `cre update`
+ * ...") is noise: the runner image pins the CLI on purpose, so the user can
+ * never act on it. Dropped before any event is produced, mirroring
+ * classify.sh's classify_emit_events filter (parity-pinned).
+ */
+const UPDATE_BANNER_RE = /Update available!|Run `cre update`/;
+
+/**
  * Classify one raw CLI output line into zero or more NDJSON event strings.
- * Every line yields one {"t":"log",...} event; lines carrying a
- * "[USER LOG] <nodeId>: ..." prefix additionally yield a {"t":"node",...}
- * event right after, preserving stream order.
+ * Banner lines yield nothing; every other line yields one {"t":"log",...}
+ * event, and lines carrying a "[USER LOG] <nodeId>: ..." prefix additionally
+ * yield a {"t":"node",...} event right after, preserving stream order.
  */
 export function classifyLine(line: string): string[] {
+  if (UPDATE_BANNER_RE.test(line)) return [];
   const esc = jsonEncode(line);
   const out = [`{"t":"log","line":"${esc}"}`];
   const m = NODE_RE.exec(line);

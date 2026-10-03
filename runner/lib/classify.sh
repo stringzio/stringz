@@ -94,6 +94,12 @@ classify_json_encode() {
 classify_emit_events() {
   local raw="$1"
   while IFS= read -r line || [ -n "$line" ]; do
+    # The CLI's self-update banner is noise for the user: the runner image
+    # pins the CLI on purpose (log-parse stability), so "there is a newer
+    # version" has no action for the user and just pollutes the runner log.
+    if [[ "$line" == *"Update available!"* || "$line" == *'Run `cre update`'* ]]; then
+      continue
+    fi
     local scrubbed esc
     scrubbed="$(classify_redact "$line")"
     esc="$(classify_json_encode "$scrubbed")"

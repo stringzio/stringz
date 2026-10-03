@@ -95,6 +95,18 @@ function parseNdjson(stdout: string): NdjsonEvent[] {
     nodes,
   );
   check("events: timestamp-prefixed USER LOG lines still capture the node id", nodes.some((e) => e.id === "pf"));
+  check("events: CLI update banner is stripped from the stream", (() => {
+    const tmp = path.join("/tmp", "sim-banner-strip.log");
+    fs.writeFileSync(tmp, [
+      '✓ Workflow Simulation Result:',
+      '"ok"',
+      '⚠ Update available! You\'re running 1.35.0, but 1.36.0 is the latest.',
+      'Run `cre update` or visit https://github.com/smartcontractkit/cre-cli/releases to upgrade.',
+    ].join("\n") + "\n");
+    const stripped = parseNdjson(runClassify(["events", tmp]).stdout);
+    fs.rmSync(tmp, { force: true });
+    return stripped.every((e) => !/Update available!|cre update/.test(e.line ?? ""));
+  })(), "banner lines leaked into events");
   check("events: node event follows its log event", (() => {
     const i = events.findIndex((e) => e.t === "node" && e.id === "fmt");
     return i > 0 && events[i - 1].t === "log" && events[i - 1].line === events[i].line;
@@ -362,6 +374,8 @@ function runStreamParityTest() {
     '2026-09-26T00:00:00Z [USER LOG] fmt: replace -> ETH/USD = $2689.62',
     '2026-09-26T00:00:00Z [USER LOG] spaced-id   : trailing spaces in id',
     'unicode box-drawing ✓ and emoji 🚀',
+    '⚠ Update available! You\'re running 1.35.0, but 1.36.0 is the latest.',
+    'Run `cre update` or visit https://github.com/smartcontractkit/cre-cli/releases to upgrade.',
   ];
   const tmpEdge = path.join("/tmp", "sim-parity-edge.log");
   fs.writeFileSync(tmpEdge, edge.join("\n") + "\n");
