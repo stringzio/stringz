@@ -142,6 +142,34 @@ try {
     name: "wire",
   });
   check("signup through the real http envelope", signup.status === 200 && !!signup.cookie, signup);
+  const userId = (signup.body as { result?: { data?: { id?: string } } }).result?.data?.id ?? "";
+
+  const pg = (await import("pg")).default;
+  const pgClient = new pg.Client({ connectionString: databaseUrl });
+  await pgClient.connect();
+
+  // ── #67: entitlements degrade without stringz-pay (self-host) ─────────────
+  // The scratch DB has no sp_entitlements table - the shape a self-hoster runs
+  // when stringz-pay is not deployed. Entitlements must answer 200 with
+  // community limits (falling back to the local users.plan columns), not 500.
+  const entitlements0 = await trpc("billing.entitlements", undefined, signup.cookie);
+  const e0 = (entitlements0.body as { result?: { data?: { tier?: string } } }).result?.data;
+  check(
+    "entitlements answers 200 tier=community when sp_entitlements is absent",
+    entitlements0.status === 200 && e0?.tier === "community",
+    entitlements0.body,
+  );
+
+  const paidThrough = new Date(Date.now() + 30 * 86400_000).toISOString();
+  await pgClient.query("update users set plan = 'pro', plan_status = 'active', plan_renewal_at = $1 where id = $2", [paidThrough, userId]);
+  const entitlements1 = await trpc("billing.entitlements", undefined, signup.cookie);
+  const e1 = (entitlements1.body as { result?: { data?: { tier?: string; paidThrough?: string | null } } }).result?.data;
+  check(
+    "missing-table fallback reads the local plan columns",
+    entitlements1.status === 200 && e1?.tier === "pro" && e1?.paidThrough === paidThrough,
+    entitlements1.body,
+  );
+  await pgClient.query("update users set plan = 'community', plan_status = 'active', plan_renewal_at = null where id = $1", [userId]);
 
   const verify = (txHash: string) =>
     trpc("billing.verify", { chain: "avalanche", txHash, plan: "pro_monthly" }, signup.cookie);
@@ -179,9 +207,6 @@ try {
   // confirms, 0xfb proves WRONG_RECIPIENT. The worker must land the credit /
   // dead-letter with no user retry in between.
 
-  const pg = (await import("pg")).default;
-  const pgClient = new pg.Client({ connectionString: databaseUrl });
-  await pgClient.connect();
   const settlementRow = async (txHash: string) => {
     const { rows } = await pgClient.query(
       "select status, last_error, attempts from payment_settlements where tx_hash = $1",
