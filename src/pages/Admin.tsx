@@ -384,7 +384,7 @@ export default function Admin() {
   const kpis = stats
     ? [
         { icon: Users, label: "Users", value: String(stats.users.total), sub: `+${stats.users.last7d} last 7d` },
-        { icon: CreditCard, label: "Paid plans", value: String(stats.users.paid_plans), sub: `${stats.mrr ? `$${stats.mrr.mrrUsd.toFixed(2)} est. MRR` : "rail not linked"}` },
+        { icon: CreditCard, label: "Paid plans", value: String(stats.mrr ? stats.mrr.activePaid : stats.users.paid_plans), sub: `${stats.mrr ? `$${stats.mrr.mrrUsd.toFixed(2)} est. MRR` : "rail not linked"}` },
         { icon: Cloud, label: "Cloud runs", value: String(stats.runs.total), sub: `${stats.runs.active} active now` },
         { icon: Activity, label: "Success rate", value: `${successRate}%`, sub: `${stats.runs.last7d} runs last 7d` },
         { icon: Wallet, label: "Compute (est.)", value: `$${stats.runs.cost_usd.toFixed(2)}`, sub: "executed runs only" },
