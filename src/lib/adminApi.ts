@@ -57,7 +57,7 @@ export interface AdminUserDetail {
   user: AdminUser & { avatar: string | null; plan_renewal_at: string | null; plan_provider: string | null; plan_ref: string | null };
   counts: { flows: number; local_runs: number; cloud_runs: number };
   onboarding: Record<string, unknown> | null;
-  entitlement: { plan: string; paid_through: string; tx_hash: string } | null;
+  entitlement: { plan: string; paid_through: string } | null;
   settlements: { status: string; chain: string; tx_hash: string; plan: string; attempts: number; last_error: string | null; created_at: string }[];
   recentRuns: { id: string; status: string; error_class: string | null; duration_ms: number | null; cost_est_usd: string | null; created_at: string }[];
 }
