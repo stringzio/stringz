@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Search, ChevronRight, ChevronDown, Sparkles } from "lucide-react";
 import { SERVICES, type ServiceId } from "../data/services";
-import { isHostedOnly } from "../compiler/cre";
+import { isPaletteDisabled } from "../compiler/cre";
 
 interface ToolItem {
   service: ServiceId;
@@ -84,14 +84,16 @@ function ToolButton({ item, onAdd }: { item: ToolItem; onAdd: (s: ServiceId) => 
     </span>
   );
 
-  // Hosted-only nodes can't compile to a CRE workflow yet, so they aren't
-  // addable — shown disabled with a "Soon" tag rather than hidden, to keep the
-  // roadmap visible and stop users building flows that can't export.
-  if (isHostedOnly(item.service)) {
+  // Hosted-only nodes without a real cloud-sim emitter can't run anywhere
+  // yet — shown disabled with a "Soon" tag rather than hidden, to keep the
+  // roadmap visible and stop users building flows that can't run. The
+  // cloud-sim-ready ones (AI Agent, Notion, X) add like any node and run via
+  // Test in cloud with an ephemeral API key.
+  if (isPaletteDisabled(item.service)) {
     return (
       <div
         aria-disabled
-        title="Runs on the Stringz cloud runner — coming soon"
+        title="Needs an OAuth-connected account — lands in v0.1"
         className="mb-1.5 flex w-full cursor-not-allowed select-none items-start gap-3 rounded-2xl px-2 py-2 text-left opacity-50"
       >
         {icon}

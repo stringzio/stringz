@@ -47,12 +47,23 @@ export function isHostedOnly(service: ServiceId): boolean {
   return !(EXPORTABLE_SERVICES as readonly string[]).includes(service);
 }
 
+/** Subset of the hosted-only services whose cloud-sim emitters are real
+ *  (issue #11 Slice 3C, live-validated): they run today via Test in cloud
+ *  with an ephemeral API key, so the palettes add them like any node. The
+ *  rest stay disabled until their OAuth connect lands (v0.1). */
+const CLOUD_SIM_READY = ["chatgpt", "notion", "x"] as const;
+
+/** Palette gate: hosted-only AND no real cloud-sim emitter yet. */
+export function isPaletteDisabled(service: ServiceId): boolean {
+  return isHostedOnly(service) && !(CLOUD_SIM_READY as readonly string[]).includes(service);
+}
+
 /** The secret for these services is an API key or bot token, not a callable URL - they need the hosted Stringz runner. */
 function cloudRunnerError(module: string, action?: string): BlueprintError {
   const name = SERVICES[module as ServiceId]?.name ?? module;
   const label = action ? `${name} - ${action}` : name;
   return new BlueprintError(
-    `${label} runs on the Stringz cloud runner (coming in the hosted plan). Exported CRE projects currently support ${EXPORTABLE_MODULES}. Remove or replace this step to export.`,
+    `${label} runs on the Stringz cloud runner. Use Test in cloud to run this flow with your API key - exported CRE projects currently support ${EXPORTABLE_MODULES}. Remove or replace this step to export.`,
     "UNSUPPORTED_MODULE",
   );
 }

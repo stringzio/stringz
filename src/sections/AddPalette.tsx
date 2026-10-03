@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Command } from "cmdk";
 import { Search } from "lucide-react";
 import { SERVICES, type ServiceId } from "../data/services";
-import { isHostedOnly } from "../compiler/cre";
+import { isPaletteDisabled } from "../compiler/cre";
 
 /**
  * Keyboard-first node search (Phase 3d): Cmd/Ctrl+K opens it, typing filters
@@ -51,8 +51,10 @@ export default function AddPalette({
               No modules match.
             </Command.Empty>
             {(Object.keys(SERVICES) as ServiceId[]).map((sid) => {
-              // Hosted-only nodes can't export yet — disabled + "Soon", not hidden.
-              const hosted = isHostedOnly(sid);
+              // Hosted-only nodes without a real cloud-sim emitter can't run
+              // anywhere yet — disabled + "Soon", not hidden. Cloud-sim-ready
+              // ones (AI Agent, Notion, X) add like any node.
+              const hosted = isPaletteDisabled(sid);
               return (
                 <Command.Item
                   key={sid}
