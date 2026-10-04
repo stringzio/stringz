@@ -175,8 +175,10 @@ jobs:
   # Build + push the simulation runner image on every merge to main (after
   # quality). Same WIF auth as the api deploy; the deploy SA has
   # artifactregistry.writer. Tags are sha-<full sha>, same convention as the
-  # api image. The Cloud Run Job itself is created/updated manually per
-  # INFRA.md - pushing the image does not change what the job runs.
+  # api image. The final step also points the Cloud Run job at the new tag -
+  # without it the job keeps running the previous image until someone updates
+  # it by hand (2026-10-05: the setup-events runner change shipped but the job
+  # still ran the old image because this step did not exist).
   runner-image:
     needs: quality
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -211,3 +213,10 @@ jobs:
             esac
             sleep 15
           done
+      - name: Point the Cloud Run job at the new image
+        run: |
+          gcloud run jobs update sim-runner \
+            --image="${RUNNER_IMAGE_TAG}" \
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --quiet

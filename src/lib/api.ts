@@ -44,6 +44,22 @@ async function call<T>(path: string, input?: unknown): Promise<T> {
   return body.result!.data;
 }
 
+/**
+ * Query procedures with an input: the tRPC server only accepts GET for
+ * queries (POST -> 405), so the input rides as the `?input=` search param
+ * in tRPC's envelope shape. `call()` above would POST these and fail - that
+ * left simulate.status broken for every caller until 2026-10-05.
+ */
+async function callQuery<T>(path: string, input: unknown): Promise<T> {
+  const qs = `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`;
+  const res = await fetch(`/trpc/${path}${qs}`, { method: "GET", credentials: "same-origin" });
+  const body = (await res.json()) as { result?: { data: T }; error?: { message?: string } };
+  if (!res.ok || body.error) {
+    throw new Error(body.error?.message ?? `Request failed (${res.status})`);
+  }
+  return body.result!.data;
+}
+
 export const api = {
   config: {
     auth: () => call<AuthConfig>("config.auth"),
@@ -81,11 +97,11 @@ export const api = {
   },
   runs: {
     record: (input: RunRecordInput) => call<{ ok: boolean }>("runs.record", input),
-    recent: (input: { limit: number }) => call<RunRecord[]>("runs.recent", input),
+    recent: (input: { limit: number }) => callQuery<RunRecord[]>("runs.recent", input),
   },
   simulate: {
     enqueue: (input: SimulateEnqueueInput) => call<SimulateEnqueueResponse>("simulate.enqueue", input),
-    status: (input: { runId: string }) => call<SimulateRun>("simulate.status", input),
+    status: (input: { runId: string }) => callQuery<SimulateRun>("simulate.status", input),
     cancel: (input: SimulateCancelInput) => call<SimulateCancelResponse>("simulate.cancel", input),
     list: () => call<SimulateListResponse>("simulate.list"),
   },
