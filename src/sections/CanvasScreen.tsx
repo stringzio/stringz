@@ -1774,7 +1774,9 @@ cd .. && cre workflow simulate ${flowSlug}-workflow --target staging-settings`}<
           <div>
             <p className="text-[12px] font-semibold text-[#1a1a1a]">2 · Deploy to the Chainlink DON - approval required</p>
             <p className="mt-0.5 text-[11.5px] leading-snug text-gray-500">
-              DON deployment needs Chainlink review. Request access, then redeploy with{" "}
+              DON deployment needs Chainlink review, which your organization requests itself: run{" "}
+              <span className="font-mono text-[10.5px]">cre account access</span> in the exported project, answer
+              the use-case prompt, and Chainlink replies by email. Then deploy with{" "}
               <span className="font-mono text-[10.5px]">cre workflow deploy</span>.
             </p>
             <a
