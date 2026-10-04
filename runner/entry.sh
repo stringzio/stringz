@@ -62,6 +62,12 @@ set -u -o pipefail
 
 log() { printf '[sim-entry] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
+# Setup progress for the live stream: the tailer follows $rawlog from offset 0
+# and classifies every line into a log event, so a one-line marker here shows
+# up in the builder's runner log within a flush tick. Without these, the
+# download/install/compile phase (~1-4 min) is silent and reads as "stuck in
+# queue". Guarded: setup markers before rawlog exists land on stderr only.
+say() { printf '%s\n' "$*" >> "$rawlog" 2>/dev/null || true; }
 
 # --- locate classify.sh (container install, else repo-relative for local runs)
 SIM_LIB="${SIM_LIB:-}"
@@ -126,6 +132,7 @@ elif [ -n "${INGEST_URL:-}" ]; then
 fi
 
 # --- fetch the project archive
+say "[setup] downloading your project"
 tgz="$workdir/project.tgz"
 case "$SRC_URL" in
   https://* | http://*)
@@ -162,6 +169,7 @@ if [ "$tgz_size" -gt "$MAX_PROJECT_BYTES" ]; then
 fi
 
 # --- extract and locate the workflow dir
+say "[setup] project downloaded (${tgz_size} bytes), extracting"
 tar -xzf "$tgz" -C "$proj" || die "archive extraction failed (want gzip tarball of the project root)"
 wfdir=""
 for d in "$proj"/*-workflow; do
@@ -170,6 +178,7 @@ done
 [ -n "$wfdir" ] || die "no <slug>-workflow directory found in archive"
 [ -f "$proj/project.yaml" ] || die "archive has no project.yaml at its top level"
 log "project extracted: $(basename "$wfdir")"
+say "[setup] project extracted: $(basename "$wfdir")"
 
 # --- auth session. /secrets/cre from Secret Manager is a read-only FILE
 # (the tar.gz archive produced by the rotation runbook), while local docker
@@ -250,6 +259,7 @@ if [ -n "$secrets_json" ]; then
     fs.writeFileSync(process.env.VALUES_FILE, values.join("\n") + (values.length ? "\n" : ""))
   ' || die "secrets merge failed"
   chmod 600 "$workdir/secrets.values" 2>/dev/null || true
+  say "[setup] run secrets merged into .env (values never logged)"
   export SECRET_VALUES_FILE="$workdir/secrets.values"
 fi
 
@@ -257,12 +267,15 @@ fi
 # exact dependency set of generated projects, so this hits cache on the hot
 # path; registry egress only happens on a cache miss.
 log "installing workflow dependencies (bun)"
+say "[setup] installing workflow dependencies (bun install) - the slow step on a fresh runner"
 ( cd "$wfdir" && bun install ) >&2 || die "bun install failed in $(basename "$wfdir")"
+say "[setup] dependencies installed, starting the CRE simulator"
 
 # --- run the simulation from the PROJECT ROOT (where project.yaml lives).
 # The CLI's exit code is unreliable, so we classify by output markers instead.
 # timeout -k: SIGKILL 10s after SIGTERM if the CLI hangs.
 log "running: cre workflow simulate $(basename "$wfdir") --target $TARGET --non-interactive --trigger-index $TRIGGER_IDX${HTTP_PAYLOAD:+ --http-payload <file>}${EVM_TX_HASH:+ --evm-tx-hash $EVM_TX_HASH}"
+say "[sim] cre workflow simulate starting"
 cd "$proj" || die "cannot cd into project dir"
 # Phase 3 Slice 3B: trigger inputs. The payload goes to a file (argv length
 # limits); the flags are only added when the values are set. Generated
@@ -276,12 +289,16 @@ fi
 if [ -n "${EVM_TX_HASH:-}" ]; then
   extra_flags+=(--evm-tx-hash "$EVM_TX_HASH")
 fi
+# Append, never truncate: setup markers written to $rawlog before this point
+# must survive into the canonical event stream, and the live tailer holds a
+# byte offset into this file - a truncate would desync it (size < offset,
+# then a mid-line resume).
 timeout -k 10 "$SIM_TIMEOUT" cre workflow simulate "$wfdir" \
   --target "$TARGET" \
   --non-interactive \
   --trigger-index "$TRIGGER_IDX" \
   ${extra_flags[@]+"${extra_flags[@]}"} \
-  > "$rawlog" 2>&1
+  >> "$rawlog" 2>&1
 cli_code=$?
 cd - >/dev/null || true
 log "CLI exited code=$cli_code (informational only; status comes from output markers)"

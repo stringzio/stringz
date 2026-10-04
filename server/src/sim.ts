@@ -509,30 +509,45 @@ const TERMINAL_STATUSES = new Set(["succeeded", "failed", "auth_error", "timeout
  * result never arrives go stale after 15 minutes. Terminal rows get their
  * event stream re-read so status polls keep returning it.
  */
+/**
+ * Apply a runner result event to a running row: terminal status, duration,
+ * cost, and secret teardown. Shared by reconcileRun (GCS path) and the live
+ * ingest path, so the row goes terminal the moment the runner reports - not
+ * whenever a poller happens to show up (a run whose sheet stayed open used
+ * to sit "running" for the full 15 minutes until the stale sweep).
+ */
+async function applyResultEvent(
+  row: SimulationRunRow,
+  resultEvent: SimulationEvent,
+): Promise<SimulationRunRow> {
+  secretValueCache.delete(row.id);
+  const runnerStatus = typeof resultEvent.status === "string" ? resultEvent.status : "failed";
+  // Keep auth_error/timeout as first-class row statuses: the rotation
+  // alert keys off auth_error, and the UI explains each differently.
+  const known = runnerStatus === "succeeded" || runnerStatus === "auth_error" || runnerStatus === "timeout";
+  const durationMs = meteredDurationMs(row);
+  const patch = {
+    status: known ? runnerStatus : "failed",
+    errorClass: runnerStatus === "succeeded" ? null : runnerStatus,
+    exitCode: typeof resultEvent.exitCode === "number" ? resultEvent.exitCode : null,
+    result: typeof resultEvent.result === "string" ? resultEvent.result : null,
+    durationMs,
+    costEstUsd: costEstimateFor(durationMs),
+    updatedAt: new Date().toISOString(),
+  };
+  const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
+  void deleteRunSecrets(row.id);
+  return updated ?? { ...row, ...patch };
+}
+
 export async function reconcileRun(row: SimulationRunRow): Promise<{ row: SimulationRunRow; events: SimulationEvent[] }> {
   const now = new Date().toISOString();
   if (row.status === "running") {
     const events = await loadEvents(row.id);
     const resultEvent = [...events].reverse().find((e) => e.t === "result");
     if (resultEvent) {
-      secretValueCache.delete(row.id);
-      const runnerStatus = typeof resultEvent.status === "string" ? resultEvent.status : "failed";
-      // Keep auth_error/timeout as first-class row statuses: the rotation
-      // alert keys off auth_error, and the UI explains each differently.
-      const known = runnerStatus === "succeeded" || runnerStatus === "auth_error" || runnerStatus === "timeout";
-      const durationMs = meteredDurationMs(row);
-      const patch = {
-        status: known ? runnerStatus : "failed",
-        errorClass: runnerStatus === "succeeded" ? null : runnerStatus,
-        exitCode: typeof resultEvent.exitCode === "number" ? resultEvent.exitCode : null,
-        result: typeof resultEvent.result === "string" ? resultEvent.result : null,
-        durationMs,
-        costEstUsd: costEstimateFor(durationMs),
-        updatedAt: now,
-      };
-      const [updated] = await db.update(schema.simulationRuns).set(patch).where(eq(schema.simulationRuns.id, row.id)).returning();
-      void deleteRunSecrets(row.id);
-      return { row: updated ?? { ...row, ...patch }, events };
+      const updated = await applyResultEvent(row, resultEvent);
+      return { row: updated, events };
     }
     if (Date.now() - new Date(row.updatedAt).getTime() > STALE_RUNNING_MS) {
       // Phase 4 Slice 4B: kill the Cloud Run execution too, not just the row.
@@ -659,6 +674,28 @@ export async function ingestEvents(
     await client.query("SELECT pg_notify('sim_events', $1)", [runId]);
   } finally {
     client.release();
+  }
+  // Result reached us live: flip the row now instead of waiting for a status
+  // poll (lazy reconcile) or the 15-minute sweep. Stats, quota, and the
+  // Statistics page stay accurate even when the builder sheet never polls.
+  const resultEvent = clean
+    .map((s) => {
+      try {
+        return JSON.parse(s) as SimulationEvent;
+      } catch {
+        return null;
+      }
+    })
+    .find((e): e is SimulationEvent => !!e && e.t === "result");
+  if (resultEvent) {
+    try {
+      const [row] = await db.select().from(schema.simulationRuns).where(eq(schema.simulationRuns.id, runId)).limit(1);
+      if (row && row.status === "running") await applyResultEvent(row, resultEvent);
+    } catch (err) {
+      // Never let a bookkeeping failure break ingest - the GCS reconcile
+      // path applies the same patch whenever a poller shows up.
+      console.error("[sim] result-flip on ingest failed:", err);
+    }
   }
   return { outcome: "ok", received: clean.length };
 }
