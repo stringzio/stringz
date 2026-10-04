@@ -473,18 +473,24 @@ function Steps() {
   const steps = [
     {
       n: "Step 1",
+      img: "/assets/step-1.webp",
+      alt: "A wallet connecting to a phone by fingerprint - sign in and connect",
       title: "Connect & set up",
       desc: "Sign in with your wallet or social account. Connect MetaMask in one tap — Stringz never holds your keys.",
       pill: "Connect wallet",
     },
     {
       n: "Step 2",
+      img: "/assets/step-2.webp",
+      alt: "A laptop showing a canvas of connected automation nodes being dragged into place",
       title: "Build & automate",
       desc: "Start from a template or describe your flow. Drag nodes, pick chains, simulate the run before anything goes live.",
       pill: "Simulate first",
     },
     {
       n: "Step 3",
+      img: "/assets/step-3.webp",
+      alt: "A rocket launching out of a laptop screen with rising charts",
       title: "Deploy & scale",
       desc: "Compile to a CRE workflow and deploy when you're approved. Track executions and gas from the dashboard.",
       pill: "Deploy",
@@ -512,6 +518,13 @@ function Steps() {
             {...fadeUp(i * 0.08)}
             className="rounded-[24px] bg-white p-6 shadow-sm ring-1 ring-black/5"
           >
+            <img
+              src={s.img}
+              alt={s.alt}
+              loading="lazy"
+              decoding="async"
+              className="mx-auto -mt-1 mb-4 h-44 w-44 object-contain"
+            />
             <div className="mx-auto flex w-fit items-center gap-2 rounded-full bg-[#F4F4F1] px-4 py-2 text-[12px] font-bold text-[#171717] ring-1 ring-black/5">
               {s.pill}
             </div>
