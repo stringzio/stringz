@@ -33,6 +33,15 @@ jobs:
         # The 11 errors in the vendored shadcn/ui files are pre-existing;
         # app code must stay clean.
         run: bun run lint:app
+      - name: Server image-parity check
+        # The runtime image installs server/package.json STANDALONE (see the
+        # Dockerfile deps stage), while local dev resolves from the repo-root
+        # node_modules - so a dep added at the root but not to
+        # server/package.json passes every local gate and kills the deploy
+        # at startup (2026-10-04 docs deploy: marked). scripts/check-server-deps.py
+        # walks the server module graph (including its src/lib imports) and
+        # fails on any bare import missing from server/package.json.
+        run: python3 scripts/check-server-deps.py
 
   e2e:
     runs-on: ubuntu-latest
