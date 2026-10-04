@@ -51,7 +51,10 @@ export const FEATURE_ROWS: readonly { label: string; values: Record<Tier, string
   { label: "Hosted builder with autosave", values: { community: null, pro: "check", team: "check" } },
   { label: "Ephemeral run secrets", values: { community: null, pro: "check", team: "check" } },
   { label: "Export + self-host", values: { community: "check", pro: "check", team: "check" } },
-  { label: "Seats", values: { community: "1", pro: "1", team: "5" } },
+  // No seat infrastructure in v0.1 (#81 option A): a Team subscription lives
+  // on the buying account today; invites land with orgs. Advertise the honest
+  // state rather than a seat count we cannot enforce.
+  { label: "Seats", values: { community: "1", pro: "1", team: "Soon" } },
   { label: "Priority support", values: { community: null, pro: "check", team: "check" } },
 ] as const;
 

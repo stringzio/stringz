@@ -55,7 +55,9 @@ const stub = Bun.serve({
       return Response.json({
         credited: true,
         alreadyCredited,
-        plan: "pro_monthly",
+        // Echo the requested plan so a team-tier purchase is distinguishable
+        // from pro at the browser seam (stringz#81).
+        plan: (body as { plan?: string }).plan ?? "pro_monthly",
         userId: body.userId,
         paidThrough: "2027-09-28T00:00:00.000Z",
         receipt: {
@@ -271,6 +273,22 @@ try {
   const cd = (credited.body as { result?: { data?: Record<string, unknown> } }).result?.data;
   check("credited reaches the browser as outcome=credited", credited.status === 200 && cd?.outcome === "credited", credited.body);
   check("credited carries paidThrough + passthrough userId", typeof cd?.paidThrough === "string" && typeof cd?.userId === "string", cd);
+
+  // Team tier (#81): the checkout sells team_monthly/team_annual; the seam
+  // must carry the plan id through to the browser unchanged.
+  const teamCredited = await trpc(
+    "billing.verify",
+    {
+      chain: "avalanche",
+      txHash: "0xcc" + "55".repeat(31),
+      plan: "team_monthly",
+      expires: Math.floor(Date.now() / 1000) + 3600,
+      sig: `0x${"ab".repeat(65)}`,
+    },
+    signup.cookie,
+  );
+  const td = (teamCredited.body as { result?: { data?: Record<string, unknown> } }).result?.data;
+  check("team purchase reaches the browser with the team plan id", teamCredited.status === 200 && td?.outcome === "credited" && td?.plan === "team_monthly", teamCredited.body);
 
   const rejected = await verify("0xdd" + "22".repeat(31));
   const rd = (rejected.body as { result?: { data?: Record<string, unknown> } }).result?.data;

@@ -15,11 +15,15 @@ const COMMUNITY = [
   "Export and self-host free forever",
 ];
 const PRO = [
-  "1,000 cloud simulations per month",
+  "Priority support",
   "Hosted builder with autosave and backups",
   "Ephemeral run secrets, destroyed at run end",
-  "Priority support",
 ];
+/** Sim quota line differs per workspace; everything else is shared copy. */
+const SIMS_LINE: Record<"personal" | "team", string> = {
+  personal: "1,000 cloud simulations per month",
+  team: "4,000 cloud simulations per month, shared",
+};
 
 const CHAIN_ID: Record<PayChain, number> = { base: base.id, arbitrum: arbitrum.id, avalanche: avalanche.id, ethereum: mainnet.id };
 
@@ -36,10 +40,13 @@ const ENTITLEMENT_WATCH_MAX_POLLS = 120;
  *  which can only fire while the sheet (and its wallet context) is live. */
 const PENDING_PAYMENT_KEY = "stringz.pendingPayment";
 
+type Workspace = "personal" | "team";
+type CheckoutPlan = "pro_monthly" | "pro_annual" | "team_monthly" | "team_annual";
+
 interface ParkedPayment {
   chain: PayChain;
   txHash: `0x${string}`;
-  plan: "pro_monthly" | "pro_annual";
+  plan: CheckoutPlan;
 }
 
 function parseParked(raw: string): ParkedPayment | null {
@@ -157,8 +164,10 @@ export default function ProSheet({
   feature?: string;
 }) {
   const pro = PLANS.find((p) => p.tier === "pro") ?? PLANS[1];
+  const teamPlan = PLANS.find((p) => p.tier === "team") ?? PLANS[2];
   const [step, setStep] = useState<Step>("offer");
   const [annual, setAnnual] = useState(false);
+  const [workspace, setWorkspace] = useState<Workspace>("personal");
   const [chain, setChain] = useState<PayChain>("base");
   const [symbol, setSymbol] = useState<"USDC" | "USDT" | "USDC.e">("USDC");
   const [error, setError] = useState("");
@@ -185,10 +194,11 @@ export default function ProSheet({
     };
   }, [open]);
 
-  const priceCents = annual ? pro.annualCents : pro.monthlyCents;
+  const planInfo = workspace === "team" ? teamPlan : pro;
+  const priceCents = annual ? planInfo.annualCents : planInfo.monthlyCents;
   const dest = PAY_CHAINS.find((c) => c.id === chain) ?? PAY_CHAINS[0];
   const token = dest.tokens.find((t) => t.symbol === symbol) ?? dest.tokens[0];
-  const plan = (annual ? "pro_annual" : "pro_monthly") as "pro_annual" | "pro_monthly";
+  const plan: CheckoutPlan = workspace === "team" ? (annual ? "team_annual" : "team_monthly") : (annual ? "pro_annual" : "pro_monthly");
   const charge = chargeUnits(priceCents);
 
   // Balance-aware picker: read the connected wallet's real on-chain balance
@@ -232,7 +242,7 @@ export default function ProSheet({
   const completePayment = async (p: {
     chain: PayChain;
     txHash: `0x${string}`;
-    plan: "pro_monthly" | "pro_annual";
+    plan: CheckoutPlan;
   }) => {
     if (!userId) throw new Error("Your account is still loading - try again in a moment.");
     setConfirming(true);
@@ -327,7 +337,7 @@ export default function ProSheet({
   };
 
   return (
-    <Sheet open={open} onClose={close} title={step === "offer" ? "Pro" : "Checkout"}>
+    <Sheet open={open} onClose={close} title={step === "offer" ? (workspace === "team" ? "Team" : "Pro") : "Checkout"}>
       {step === "offer" && (
         <>
           {parkedPayment && (
@@ -363,21 +373,40 @@ export default function ProSheet({
             </ul>
           </div>
           <div className="rounded-2xl bg-[#1a1a1a] p-4">
+            <div className="mb-3 grid grid-cols-2 gap-1 rounded-full bg-white/10 p-1">
+              {(["personal", "team"] as const).map((w) => (
+                <button
+                  key={w}
+                  onClick={() => setWorkspace(w)}
+                  className={`rounded-full py-1.5 text-[11px] font-bold transition ${workspace === w ? "bg-white text-[#1a1a1a]" : "text-white/60"}`}
+                >
+                  {w === "team" ? "Team" : "Pro"}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-[14px] font-bold text-white">
-                <Sparkles size={14} className="text-[#E8A33D]" /> Pro
+                <Sparkles size={14} className="text-[#E8A33D]" /> {workspace === "team" ? "Team" : "Pro"}
               </span>
               <span className="rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-bold text-white/70">
-                {usd(pro.monthlyCents)}/mo · {usd(pro.annualCents)}/yr
+                {usd(planInfo.monthlyCents)}/mo · {usd(planInfo.annualCents)}/yr
               </span>
             </div>
             <ul className="mt-2.5 space-y-1.5">
+              <li className="flex items-start gap-2 text-[12px] text-white/80">
+                <Check size={13} className="mt-0.5 shrink-0 text-[#8fb89c]" /> {SIMS_LINE[workspace]}
+              </li>
               {PRO.map((f) => (
                 <li key={f} className="flex items-start gap-2 text-[12px] text-white/80">
                   <Check size={13} className="mt-0.5 shrink-0 text-[#8fb89c]" /> {f}
                 </li>
               ))}
             </ul>
+            {workspace === "team" && (
+              <p className="mt-2.5 text-[10.5px] leading-snug text-white/50">
+                One subscription on your account today, sized for a small team - seat invites land with orgs.
+              </p>
+            )}
             <button
               onClick={() => setStep("checkout")}
               className="mt-4 w-full rounded-full bg-white py-3 text-[13px] font-bold text-[#1a1a1a] transition active:scale-[0.98]"
@@ -397,13 +426,24 @@ export default function ProSheet({
         <div className="md:grid md:grid-cols-[1fr_300px] md:gap-8">
           <div>
           <div className="mb-3 grid grid-cols-2 gap-2">
+            {(["personal", "team"] as const).map((w) => (
+              <button
+                key={w}
+                onClick={() => setWorkspace(w)}
+                className={`rounded-2xl py-2.5 text-[12px] font-bold transition ${workspace === w ? "bg-[#1a1a1a] text-white" : "bg-gray-100 text-gray-500"}`}
+              >
+                {w === "team" ? `Team - ${usd(teamPlan.monthlyCents)}/mo` : `Pro - ${usd(pro.monthlyCents)}/mo`}
+              </button>
+            ))}
+          </div>
+          <div className="mb-3 grid grid-cols-2 gap-2">
             {(["monthly", "annual"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setAnnual(m === "annual")}
                 className={`rounded-2xl py-3 text-[12.5px] font-bold transition ${(m === "annual") === annual ? "bg-[#1a1a1a] text-white" : "bg-gray-100 text-gray-500"}`}
               >
-                {m === "annual" ? `Annual - ${usd(pro.annualCents)} (2 mo free)` : `Monthly - ${usd(pro.monthlyCents)}`}
+                {m === "annual" ? `Annual - ${usd(planInfo.annualCents)} (2 mo free)` : `Monthly - ${usd(planInfo.monthlyCents)}`}
               </button>
             ))}
           </div>
@@ -507,15 +547,15 @@ export default function ProSheet({
       {step === "success" && (
         <div className="flex flex-col items-center py-4 md:max-w-md md:mx-auto">
           <img src="/assets/payment-success.webp" alt="Payment successful" className="h-40 w-auto" />
-          <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Welcome to Pro</p>
+          <p className="mt-4 text-[16px] font-bold text-[#1a1a1a]">Welcome to {workspace === "team" ? "Team" : "Pro"}</p>
           <p className="mt-1.5 max-w-60 text-center text-[12px] leading-snug text-gray-500">
-            Your payment is confirmed. Pro is active
+            Your payment is confirmed. {workspace === "team" ? "Team" : "Pro"} is active
             {paidThrough ? (
               <>
                 {" "}until <span className="font-bold text-[#1a1a1a]">{new Date(paidThrough).toLocaleDateString()}</span>
               </>
             ) : null}{" "}
-            - 1,000 cloud simulations per month are yours.
+            - {planInfo.monthlySims.toLocaleString()} cloud simulations per month are yours.
           </p>
           <button
             onClick={close}
