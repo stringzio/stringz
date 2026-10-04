@@ -69,8 +69,10 @@ export const api = {
   },
   billing: {
     /** Verify a wallet payment with the stringz-pay rail (server-held key).
-     *  Rejections arrive as a typed result, not an exception. */
-    verify: (input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" | "team_monthly" | "team_annual" }) =>
+     *  Rejections arrive as a typed result, not an exception. expires+sig
+     *  are the payer-signed intent (stringz-pay#6) authorizing this exact
+     *  claim; the rail rejects a credit without them. */
+    verify: (input: { chain: string; txHash: string; plan: "pro_monthly" | "pro_annual" | "team_monthly" | "team_annual"; expires: number; sig: string }) =>
       call<VerifyPaymentResult>("billing.verify", input),
     entitlements: () => call<BillingEntitlements>("billing.entitlements"),
   },

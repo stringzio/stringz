@@ -243,15 +243,21 @@ export const appRouter = router({
      *  pending when the retry budget was exhausted - the client then watches
      *  billing.entitlements, where the credit lands when it confirms. */
     verify: protectedProcedure
-      .input(z.object({ chain: z.string(), txHash: z.string(), plan: z.enum(["pro_monthly", "pro_annual", "team_monthly", "team_annual"]) }))
+      .input(z.object({
+        chain: z.string(),
+        txHash: z.string(),
+        plan: z.enum(["pro_monthly", "pro_annual", "team_monthly", "team_annual"]),
+        expires: z.number().int().positive(),
+        sig: z.string().regex(/^0x[0-9a-fA-F]{130}$/, "sig must be a 0x-prefixed 65-byte EIP-191 signature"),
+      }))
       .mutation(async ({ input, ctx }): Promise<VerifyPaymentResult> => {
-        const result = await verifyPaymentWithRetry({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+        const result = await verifyPaymentWithRetry({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan, expires: input.expires, sig: input.sig });
         if (result.outcome === "pending") {
           // The retry budget died before the chain caught up: park the payment
           // in the settle-later queue so the worker credits it when it
           // confirms (stringz#62) - the client's entitlements watch stays the
           // progress signal, nothing more to do here.
-          await enqueueSettlement({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan });
+          await enqueueSettlement({ chain: input.chain, txHash: input.txHash, userId: ctx.user.id, plan: input.plan, expires: input.expires, sig: input.sig });
         }
         console.warn(
           "[billing.verify]",

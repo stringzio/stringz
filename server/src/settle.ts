@@ -45,6 +45,8 @@ export async function enqueueSettlement(input: VerifyPaymentInput): Promise<void
         chain: input.chain,
         txHash: input.txHash,
         plan: input.plan,
+        expires: input.expires,
+        sig: input.sig,
         status: "queued",
         attempts: 0,
         nextAttemptAt: now,
@@ -71,7 +73,19 @@ async function processRow(row: typeof schema.paymentSettlements.$inferSelect): P
   if (claimed.length === 0) return; // another instance took it
 
   const short = `${row.chain}:${row.txHash.slice(0, 10)}…`;
-  const input: VerifyPaymentInput = { chain: row.chain, txHash: row.txHash, userId: row.userId, plan: row.plan };
+  if (row.expires == null || !row.sig) {
+    // Row parked before payer-signed intents existed (stringz-pay#6): the
+    // rail now requires a signature this row never captured, and no retry
+    // can produce one. Dead-letter with an actionable reason instead of
+    // burning the whole attempt runway on a guaranteed rejection.
+    await db
+      .update(schema.paymentSettlements)
+      .set({ status: "dead", lastError: "INTENT_MISSING (pre-intent row; owner must re-verify)", updatedAt: new Date().toISOString() })
+      .where(eq(schema.paymentSettlements.id, row.id));
+    console.warn(`[settle] dead-lettered ${short} (pre-intent row, no signature on file)`);
+    return;
+  }
+  const input: VerifyPaymentInput = { chain: row.chain, txHash: row.txHash, userId: row.userId, plan: row.plan, expires: row.expires, sig: row.sig };
   try {
     await verifyPayment(input);
     await db

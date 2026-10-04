@@ -90,6 +90,8 @@ export const paymentSettlements = pgTable("payment_settlements", {
   chain: text("chain").notNull(),
   txHash: text("tx_hash").notNull(),
   plan: text("plan").notNull(), // pro_monthly | pro_annual | team_monthly | team_annual
+  expires: integer("expires"), // unix seconds; payer-signed intent (stringz-pay#6). null on pre-migration rows
+  sig: text("sig"), // EIP-191 intent signature. null on pre-migration rows
   status: text("status").notNull().default("queued"), // queued | processing | credited | dead
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"), // coded rail rejection or final dead-letter reason

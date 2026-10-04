@@ -251,8 +251,21 @@ try {
   const afterLogout = await adminGet("/stats", adminCookie);
   check("admin logout invalidates the session", afterLogout.status === 401, { status: afterLogout.status });
 
+  // The tRPC schema requires the payer-signed intent fields (stringz-pay#6);
+  // the stub ignores them and keys scenarios off txHash alone. Well-formed
+  // dummy values keep this check focused on the browser-visible envelope.
   const verify = (txHash: string) =>
-    trpc("billing.verify", { chain: "avalanche", txHash, plan: "pro_monthly" }, signup.cookie);
+    trpc(
+      "billing.verify",
+      {
+        chain: "avalanche",
+        txHash,
+        plan: "pro_monthly",
+        expires: Math.floor(Date.now() / 1000) + 3600,
+        sig: `0x${"ab".repeat(65)}`,
+      },
+      signup.cookie,
+    );
 
   const credited = await verify("0xcc" + "11".repeat(31));
   const cd = (credited.body as { result?: { data?: Record<string, unknown> } }).result?.data;
