@@ -102,8 +102,8 @@ export function CloudRunDetail({ state, onCancel }: { state: CloudRunState; onCa
         <p className="mb-3 flex items-center gap-1.5 rounded-2xl bg-gray-50 px-4 py-3 text-[11.5px] leading-snug text-gray-500">
           <Cloud size={13} className="shrink-0" />
           {state.phase === "queued"
-            ? "Your project is in the queue - a runner picks it up in about a second."
-            : "Logs stream here live as the runner executes your flow."}
+            ? "Handing your run to a runner - usually a few seconds."
+            : "Setting up takes a minute or two (download, install, compile) - log lines appear here as they happen."}
         </p>
       )}
 
