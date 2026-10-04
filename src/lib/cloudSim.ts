@@ -118,6 +118,33 @@ export async function runCloudSimulation(opts: {
   if (!up.ok) throw new Error(`Project upload failed (${up.status})`);
   push({ phase: "queued" });
 
+  // 2b. The row flips to "running" at dispatch (~5-15s), well before the
+  // runner's first setup line streams in (~30-60s of container cold start).
+  // Without this, the badge sits on "Queued for a runner" through that whole
+  // window. Poll lightly until the row says running (or the event stream
+  // takes over, or two minutes pass).
+  let stagePolls = 0;
+  const stagePoll = setInterval(() => {
+    void (async () => {
+      stagePolls += 1;
+      const done =
+        stagePolls >= 40 || // ~2 min cap
+        state.phase === "running" ||
+        isTerminal(state.phase) ||
+        opts.signal?.aborted;
+      if (done) {
+        clearInterval(stagePoll);
+        return;
+      }
+      try {
+        const st = await api.simulate.status({ runId: enq.runId });
+        if (st.status === "running") push({ phase: "running" });
+      } catch {
+        // transient; the next tick retries
+      }
+    })();
+  }, 3000);
+
   // 3. Stream events until the runner's result event (or fall back to polls).
   let sawResult = false;
   const ingestEvent = (raw: string) => {
