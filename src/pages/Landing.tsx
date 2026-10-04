@@ -894,6 +894,9 @@ function Footer() {
             © 2026 Stringz. All rights reserved. Tooling only — never custody.
           </span>
           <span className="flex gap-6">
+            <a href="/docs" className="hover:text-[#171717]">
+              Docs
+            </a>
             <a href={SUPPORT_X_URL} target="_blank" rel="noreferrer" className="hover:text-[#171717]">
               X (Twitter)
             </a>
