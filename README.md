@@ -60,10 +60,11 @@ mobile screenshots). Needs `bun run dev:all` plus `bun add -d playwright` and
 
 ## Backend
 
-`server/` is a Bun + Hono + tRPC + Drizzle API (Postgres via `DATABASE_URL` - the
-self-hosting-friendly choice).
-It serves accounts (email + MetaMask SIWE today; Google/GitHub/Apple via env),
-saved flows, and the waitlist/newsletter forms. The web app talks to it through
+`server/` is a Bun + Hono + tRPC + Drizzle API (Postgres via `DATABASE_URL` -
+the self-hosting-friendly choice).
+It serves accounts (email + password by default; GitHub OAuth and wallet
+sign-in via env), saved flows, cloud-simulation orchestration, the billing
+proxy, and the operator admin dashboard. The web app talks to it through
 same-origin `/trpc` (dev proxy in `vite.config.ts`). The API contract
 (`src/lib/contract.ts`) is shared zod schemas, so shape drift fails typecheck.
 
@@ -71,6 +72,31 @@ same-origin `/trpc` (dev proxy in `vite.config.ts`). The API contract
 bun run server      # api only (:8787)
 bun run dev:all     # api + web
 ```
+
+## Self-hosting
+
+The builder is open source (Apache-2.0) and runs fully on your own
+infrastructure:
+
+```bash
+docker compose -f compose.yaml up -d postgres
+cp .env.example .env   # DATABASE_URL matches the compose defaults; add OAuth ids if you want them
+bun install && bun run dev:all
+```
+
+Migrations apply automatically at boot. What degrades by design without our
+hosted services:
+
+- **Without the stringz-pay rail** (`STRINGZ_PAY_URL` unset): the app runs
+  in community mode - entitlements fall back to local plan columns and the
+  checkout sheet answers with a clear error instead of charging. Nothing
+  else is gated.
+- **Without the GCP simulation fleet** (`SIM_*` unset): the canvas still
+  compiles and exports; run simulations locally with the exported project
+  (`cre workflow simulate`), which needs no approval.
+- Pro features on a self-hosted instance are the same code as Pro in our
+  cloud - what the hosted Pro tier pays for is the operated simulation
+  fleet, not extra source code.
 
 ## Stack
 
@@ -91,4 +117,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). TL;DR: `bun install`, `bun run build` mu
 
 ## License
 
-[MIT](LICENSE) - Copyright (c) 2026 Sylus Abel
+[Apache-2.0](LICENSE) - Copyright (c) 2026 Sylus Abel
