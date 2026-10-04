@@ -8,6 +8,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { eq } from "drizzle-orm";
 import { resolve } from "node:path";
 import { appRouter } from "./trpc/routers";
+import { docsApp } from "./docs";
 import { db, schema } from "./db/client";
 import { getSessionUser, SESSION_COOKIE } from "./session";
 import { oauthApp } from "./oauth";
@@ -27,6 +28,9 @@ app.route("/oauth", oauthApp);
 
 // Admin monitoring dashboard (operator env credentials; read-only aggregates).
 app.route("/admin/api", adminApp);
+
+// Docs site (stringz#89): markdown in server/docs/, served at /docs.
+app.route("/docs", docsApp);
 
 // Billing webhooks: raw body (HMAC-verified) from the payment rail.
 app.post("/billing/webhook", async (c) => {
