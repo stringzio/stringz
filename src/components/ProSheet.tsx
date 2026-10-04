@@ -1,11 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Check, Sparkles, Loader2 } from "lucide-react";
-import { useAccount, useSwitchChain, useWriteContract, useReadContracts } from "wagmi";
+import { useAccount, useSignMessage, useSwitchChain, useWriteContract, useReadContracts } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { base, arbitrum, avalanche, mainnet } from "wagmi/chains";
 import Sheet from "./Sheet";
 import { PLANS, PAY_CHAINS, TREASURY_EVM, chargeUnits, usd, type PayChain } from "../lib/pricing";
 import { SUPPORT_X_URL, SUPPORT_X_HANDLE } from "../lib/support";
+import { buildPaymentIntentMessage, paymentIntentExpiry } from "../lib/paymentIntent";
 import { api } from "../lib/api";
 
 const COMMUNITY = [
@@ -29,6 +30,35 @@ const ENTITLEMENT_WATCH_INTERVAL_MS = 5_000;
  *  here only delays discovery (the app self-heals via entitlements) - it
  *  never loses the payment. */
 const ENTITLEMENT_WATCH_MAX_POLLS = 120;
+
+/** A transfer submitted while the sheet was closing parks here and is
+ *  claimed on the next open: verifying needs a wallet signature prompt,
+ *  which can only fire while the sheet (and its wallet context) is live. */
+const PENDING_PAYMENT_KEY = "stringz.pendingPayment";
+
+interface ParkedPayment {
+  chain: PayChain;
+  txHash: `0x${string}`;
+  plan: "pro_monthly" | "pro_annual";
+}
+
+function parseParked(raw: string): ParkedPayment | null {
+  try {
+    return JSON.parse(raw) as ParkedPayment;
+  } catch {
+    return null;
+  }
+}
+
+/** External-store plumbing so the offer step can render from sessionStorage
+ *  without an impure render read. Same-tab writes always accompany a
+ *  setState (the sheet re-renders anyway); the storage listener covers the
+ *  cross-tab case. */
+const subscribeParked = (onStoreChange: () => void): (() => void) => {
+  window.addEventListener("storage", onStoreChange);
+  return () => window.removeEventListener("storage", onStoreChange);
+};
+const parkedSnapshot = (): string | null => sessionStorage.getItem(PENDING_PAYMENT_KEY);
 
 /** Thrown when the sheet is closed mid-confirmation; pay() swallows it so a
  *  deliberate close never surfaces as an error state. */
@@ -75,6 +105,10 @@ function friendlyPaymentError(err: unknown, network: string, symbol: string): st
     return "The amount sent does not match the plan price. Send the exact amount shown at checkout.";
   if (/WRONG_RECIPIENT/i.test(raw))
     return "That transaction does not contain a payment to our treasury address. If you sent it manually, contact us with the transaction link and we will credit it.";
+  if (/INTENT_EXPIRED/i.test(raw))
+    return "Your payment authorization expired before the network confirmed it. Your funds are safe in the original transaction - contact us and we will credit it manually.";
+  if (/SIGNER_MISMATCH/i.test(raw))
+    return "The connected wallet did not sign for this payment. Switch back to the wallet you paid from and try again, or contact us and we will credit it.";
   if (/timeout|timed out/i.test(raw))
     return "The network did not respond in time. Check your wallet - if the payment went out, do not retry; contact us.";
   console.warn("[checkout] raw payment error:", raw);
@@ -137,6 +171,19 @@ export default function ProSheet({
   const { openConnectModal } = useConnectModal();
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
+  const { signMessageAsync } = useSignMessage();
+
+  // The intent message binds the account id, so the pay flow needs it before
+  // signing. auth.me is the same session the server credits, so the two can
+  // never disagree on who is being paid for.
+  const [userId, setUserId] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    api.auth.me().then((u) => !cancelled && setUserId(u?.id ?? "")).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const priceCents = annual ? pro.annualCents : pro.monthlyCents;
   const dest = PAY_CHAINS.find((c) => c.id === chain) ?? PAY_CHAINS[0];
@@ -172,6 +219,68 @@ export default function ProSheet({
    *  (the wallet itself is the backstop, same as before). */
   const checkingBalance = isConnected && balancesPending;
 
+  const reportPaymentError = (err: unknown, network: string, symbol: string) => {
+    if (err instanceof WatchCancelled) return;
+    setRawError(err instanceof Error ? err.message : String(err));
+    setError(friendlyPaymentError(err, network, symbol));
+    setStep("error");
+  };
+
+  /** Sign the payment intent with the connected wallet, then ask the server
+   *  to verify and credit. Shared by the normal pay flow and the
+   *  parked-payment resume so both behave identically. */
+  const completePayment = async (p: {
+    chain: PayChain;
+    txHash: `0x${string}`;
+    plan: "pro_monthly" | "pro_annual";
+  }) => {
+    if (!userId) throw new Error("Your account is still loading - try again in a moment.");
+    setConfirming(true);
+    const expires = paymentIntentExpiry();
+    const sig = await signMessageAsync({
+      message: buildPaymentIntentMessage({ userId, plan: p.plan, chain: p.chain, txHash: p.txHash, expires }),
+    });
+    // One call: the server retries stringz-pay internally and answers
+    // credited | rejected | pending (chain still catching up).
+    const result = await api.billing.verify({ ...p, expires, sig });
+    if (result.outcome === "credited") {
+      setPaidThrough(result.paidThrough);
+      setStep("success");
+      return;
+    }
+    if (result.outcome === "rejected") throw new Error(`${result.code}: ${result.message}`);
+    const entitlements = await watchForEntitlement(() => cancelledRef.current);
+    setPaidThrough(entitlements.paidThrough ?? "");
+    setStep("success");
+  };
+
+  /** Claim a transfer submitted while the sheet was closing. Deliberately a
+   *  user click, not an on-open effect: the signature prompt needs both a
+   *  user gesture (some wallets refuse blind prompts) and a live sheet. */
+  const resumeParked = (parked: ParkedPayment) => {
+    sessionStorage.removeItem(PENDING_PAYMENT_KEY);
+    cancelledRef.current = false;
+    setStep("paying");
+    setError("");
+    setRawError("");
+    setConfirming(false);
+    const parkedDest = PAY_CHAINS.find((c) => c.id === parked.chain);
+    completePayment(parked)
+      .catch((err: unknown) => {
+        // No wallet connected to sign with: keep it parked for the next open.
+        if (!isConnected && !(err instanceof WatchCancelled)) {
+          sessionStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(parked));
+        }
+        reportPaymentError(err, parkedDest?.label ?? "the network", parkedDest?.tokens[0]?.symbol ?? "USDC");
+      })
+      .finally(() => setConfirming(false));
+  };
+
+  // Subscribed (not read) so the offer step can offer the resume without an
+  // impure render; our own writes always accompany a setState re-render.
+  const parkedRaw = useSyncExternalStore(subscribeParked, parkedSnapshot);
+  const parkedPayment = open && parkedRaw ? parseParked(parkedRaw) : null;
+
   const pay = async () => {
     if (!isConnected || !address) {
       openConnectModal?.();
@@ -195,30 +304,15 @@ export default function ProSheet({
         args: [TREASURY_EVM as `0x${string}`, chargeUnits(priceCents)],
       });
       if (cancelledRef.current) {
-        // Sheet closed while the wallet prompt was open, but the transfer
-        // may already be submitted: verify it so the credit is never lost,
-        // just skip the watch and any UI on the closed sheet.
-        api.billing.verify({ chain, txHash, plan }).catch(() => {});
+        // Sheet closed while the wallet prompt was open, but the transfer may
+        // already be submitted: park it and claim on reopen so the credit is
+        // never lost.
+        sessionStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify({ chain, txHash, plan }));
         return;
       }
-      setConfirming(true);
-      // One call: the server retries stringz-pay internally and answers
-      // credited | rejected | pending (chain still catching up).
-      const result = await api.billing.verify({ chain, txHash, plan });
-      if (result.outcome === "credited") {
-        setPaidThrough(result.paidThrough);
-        setStep("success");
-        return;
-      }
-      if (result.outcome === "rejected") throw new Error(`${result.code}: ${result.message}`);
-      const entitlements = await watchForEntitlement(() => cancelledRef.current);
-      setPaidThrough(entitlements.paidThrough ?? "");
-      setStep("success");
+      await completePayment({ chain, txHash, plan });
     } catch (err) {
-      if (err instanceof WatchCancelled) return;
-      setRawError(err instanceof Error ? err.message : String(err));
-      setError(friendlyPaymentError(err, dest.label, token.symbol));
-      setStep("error");
+      reportPaymentError(err, dest.label, token.symbol);
     } finally {
       setConfirming(false);
     }
@@ -236,6 +330,19 @@ export default function ProSheet({
     <Sheet open={open} onClose={close} title={step === "offer" ? "Pro" : "Checkout"}>
       {step === "offer" && (
         <>
+          {parkedPayment && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-2xl bg-[#E9F0F7] px-4 py-3">
+              <p className="text-[12px] font-medium leading-snug text-[#3d5f8a]">
+                A payment you already sent is waiting to be verified - no need to pay again.
+              </p>
+              <button
+                onClick={() => resumeParked(parkedPayment)}
+                className="shrink-0 rounded-full bg-[#1a1a1a] px-4 py-2 text-[11.5px] font-bold text-white transition active:scale-[0.98]"
+              >
+                Resume
+              </button>
+            </div>
+          )}
           {feature && (
             <p className="mb-4 rounded-2xl bg-[#FDF3E3] px-4 py-3 text-[12.5px] font-medium leading-snug text-[#7a5a22]">
               {feature} is a Pro feature.

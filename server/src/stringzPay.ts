@@ -13,6 +13,11 @@ export interface VerifyPaymentInput {
   txHash: string;
   userId: string;
   plan: string;
+  /** Payer-signed intent (stringz-pay#6): unix expiry + EIP-191 signature
+   *  over the exact payment fields. Forwarded verbatim to the rail, which
+   *  rejects the credit without them. */
+  expires: number;
+  sig: string;
 }
 
 const baseUrl = () => process.env.STRINGZ_PAY_URL ?? "http://localhost:8080";
