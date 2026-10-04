@@ -1,6 +1,8 @@
-# Optional production-parity Postgres for the backend. The dev/self-host
-# default is SQLite at server/data/flowkit.db - zero setup, no Docker required.
+# Optional Postgres for local dev and self-hosting. The server requires a
+# Postgres DATABASE_URL (there is no embedded database).
 # Start Docker Desktop first, then: docker compose -f compose.yaml up -d postgres
+# which matches the defaults in .env.example
+# (DATABASE_URL=postgres://flowkit:flowkit@127.0.0.1:5432/flowkit).
 
 services:
   postgres:

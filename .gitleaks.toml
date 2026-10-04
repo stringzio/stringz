@@ -1,0 +1,19 @@
+# Project gitleaks config: default rules plus allowlists for the two known
+# false positives that ship in test fixtures. The allowlist entries are
+# precise (one public token contract address, one planted test key) so real
+# leaks in these files still trip the scan. Run the pre-public gate with:
+#   gitleaks detect --source .
+
+[extend]
+useDefault = true
+
+[allowlist]
+regexTarget = "match"
+regexes = [
+  # Avalanche USDC contract address, used as a stub fixture in
+  # server/test/verify-wire-check.ts - a public token contract, not a key.
+  '''0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E''',
+  # Deliberately planted fake key in runner/test/contract-test.ts that
+  # verifies secrets never leak into runner output.
+  '''sk-test-PLANTED-12345''',
+]
