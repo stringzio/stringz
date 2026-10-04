@@ -49,7 +49,11 @@ cd .. && cre workflow simulate <flow-name>-workflow --target staging-settings
 ```
 
 Local simulation is self-serve - no Chainlink approval needed. Deploying to a DON
-requires access: https://docs.chain.link/cre/account/deploy-access
+requires access your organization requests itself: run `cre account access`
+(checks status, submits the request with a short use-case description; Chainlink
+reviews by email - `cre whoami` shows the status). Once approved:
+`cre workflow deploy <flow>-workflow --target production-settings`.
+Details: https://docs.chain.link/cre/account/deploy-access
 
 ## Headless browser check
 

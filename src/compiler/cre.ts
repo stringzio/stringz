@@ -1337,10 +1337,20 @@ cd .. && cre workflow simulate ${wf} --target staging-settings
 
 ## Deploy to the Chainlink DON
 
-Deploying to a DON requires Chainlink approval - Stringz can't grant it.
+Deploying to a DON requires Chainlink approval - Stringz can't grant it, and
+your workflow runs under your own CRE account either way.
 
-1. Request access: https://docs.chain.link/cre/account/deploy-access (or \`cre account access\`)
-2. Once approved: \`cre workflow deploy ${wf} --target production-settings\`
+1. Check your status and request access in one step:
+   \`\`\`bash
+   cre account access
+   \`\`\`
+   If access isn't enabled yet, confirm the prompt and briefly describe what
+   you're building - Chainlink reviews the request and replies by email.
+   \`cre whoami\` shows your current Deploy Access status.
+2. Once approved:
+   \`\`\`bash
+   cre workflow deploy ${wf} --target production-settings
+   \`\`\`
 
 Stringz is tooling only - keys, funds, gas and secrets are always yours.
 `;
