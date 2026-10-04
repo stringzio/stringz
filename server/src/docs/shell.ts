@@ -157,7 +157,7 @@ const CSS = `
   }
   .prose blockquote p { margin: 0; }
   .prose hr { border: none; border-top: 1px solid ${BRAND.border}; margin: 30px 0; }
-  .prose img { max-width: 100%; border-radius: 12px; }
+  .prose img { max-width: 100%; height: auto; border-radius: 12px; border: 1px solid ${BRAND.border}; }
   .prose table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
   .prose th, .prose td { border: 1px solid ${BRAND.border}; padding: 8px 12px; text-align: left; }
   .prose th { background: ${BRAND.hover}; font-weight: 600; color: ${BRAND.ink}; }

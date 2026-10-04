@@ -11,6 +11,13 @@ import { heroFigure } from "./illustration";
 import { navSections, pageHref, pageList, sectionLabelFor, SLUG_RE, docsDir } from "./pages";
 import { SHELL } from "./shell";
 
+const ASSET_RE = /^[a-z0-9][a-z0-9-]*\.(webp|png|jpg)$/;
+const ASSET_TYPES: Record<string, string> = {
+  webp: "image/webp",
+  png: "image/png",
+  jpg: "image/jpeg",
+};
+
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -82,6 +89,20 @@ function renderPage(slug: string): string | null {
 }
 
 export const docsApp = new Hono();
+
+docsApp.get("/assets/:file", (c) => {
+  const file = c.req.param("file");
+  if (!ASSET_RE.test(file)) return c.text("not found", 404);
+  const path = resolve(docsDir, "assets", file);
+  if (!existsSync(path)) return c.text("not found", 404);
+  const ext = file.split(".").pop() ?? "webp";
+  return new Response(readFileSync(path), {
+    headers: {
+      "content-type": ASSET_TYPES[ext] ?? "application/octet-stream",
+      "cache-control": "public, max-age=3600",
+    },
+  });
+});
 
 docsApp.get("/", (c) => {
   const html = renderPage("index");
