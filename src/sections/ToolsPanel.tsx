@@ -14,6 +14,7 @@ const SECTIONS: { name: string; items: ToolItem[] }[] = [
     items: [
       { service: "flow-control", desc: "Continue or halt the flow based on a condition." },
       { service: "sleep", desc: "Sets how often this flow runs." },
+      { service: "text-parser", desc: "Replace, split, or extract text between steps." },
       { service: "variables", desc: "Get, set, or increment a value for later steps." },
     ],
   },
