@@ -92,7 +92,13 @@ COPY --chown=bun:bun warm/package.json ./
 RUN bun install --no-save && rm -rf node_modules
 
 # --- final image ---------------------------------------------------------------
-FROM oven/bun:${BUN_TAG}
+# Slim base: the full oven/bun image carries build toolchains the runner never
+# uses at runtime, and every megabyte shows up in the Cloud Run cold-start pull
+# (2026-10-05 forensics: ~2.5 min from task start to entry.sh on a fresh node).
+# Runtime deps used by entry.sh/classify.sh (bash, tar, grep, awk, sed, sha256sum,
+# timeout, setpriv, base64) are all Essential/required Debian packages and ship
+# with bookworm-slim. Builder stages above keep the full base (they need curl).
+FROM oven/bun:${BUN_TAG}-slim
 ARG BUN_TAG
 ARG CRE_VERSION
 ARG JAVY_VERSION
