@@ -46,12 +46,14 @@ async function call<T>(path: string, input?: unknown): Promise<T> {
 
 /**
  * Query procedures with an input: the tRPC server only accepts GET for
- * queries (POST -> 405), so the input rides as the `?input=` search param
- * in tRPC's envelope shape. `call()` above would POST these and fail - that
- * left simulate.status broken for every caller until 2026-10-05.
+ * queries (POST -> 405), so the input rides as the `?input=` search param.
+ * No `json` wrapper - the server runs without a transformer, so the param is
+ * the raw parsed input (verified: wrapped -> 400 invalid_type, raw -> reaches
+ * the procedure). `call()` above would POST these and fail - that left
+ * simulate.status broken for every caller until 2026-10-05.
  */
 async function callQuery<T>(path: string, input: unknown): Promise<T> {
-  const qs = `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`;
+  const qs = `?input=${encodeURIComponent(JSON.stringify(input))}`;
   const res = await fetch(`/trpc/${path}${qs}`, { method: "GET", credentials: "same-origin" });
   const body = (await res.json()) as { result?: { data: T }; error?: { message?: string } };
   if (!res.ok || body.error) {
