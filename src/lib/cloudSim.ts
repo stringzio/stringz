@@ -44,6 +44,16 @@ const STATUS_POLL_MS = 8000;
 const terminalFrom = (status: string): CloudPhase =>
   (TERMINAL as string[]).includes(status) ? (status as CloudPhase) : "failed";
 
+/** Map a poll status onto the client phase WITHOUT inventing failures:
+ *  running is forward progress, terminal statuses map through, and
+ *  queued/preparing/uploading (or anything unknown) simply hold the current
+ *  phase - the run is still in flight. */
+const phaseFromStatus = (status: string, current: CloudPhase): CloudPhase => {
+  if (status === "running") return "running";
+  if ((TERMINAL as string[]).includes(status)) return status as CloudPhase;
+  return current;
+};
+
 export function isTerminal(phase: CloudPhase): boolean {
   return TERMINAL.includes(phase);
 }
@@ -170,10 +180,13 @@ export async function runCloudSimulation(opts: {
     while (Date.now() < deadline) {
       if (opts.signal?.aborted) return { ...state, phase: "cancelled", note: "Cancelled by you." };
       const st = await api.simulate.status({ runId: enq.runId });
-      const phase = terminalFrom(st.status);
+      const phase = phaseFromStatus(st.status, state.phase);
+      const polled = st.events as CloudRunEvent[];
       push({
         phase,
-        events: st.events as CloudRunEvent[],
+        // A still-running row reconciles to an empty event list - never wipe
+        // the streamed log with it. Terminal rows return the full history.
+        events: polled.length > 0 ? polled : state.events,
         ...(st.errorClass && phase !== "succeeded" ? { note: `Runner reported: ${st.errorClass}` } : {}),
       });
       if (isTerminal(phase)) return state;
