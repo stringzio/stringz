@@ -102,7 +102,7 @@ export function CloudRunDetail({ state, onCancel }: { state: CloudRunState; onCa
         <p className="mb-3 flex items-center gap-1.5 rounded-2xl bg-gray-50 px-4 py-3 text-[11.5px] leading-snug text-gray-500">
           <Cloud size={13} className="shrink-0" />
           {state.phase === "queued"
-            ? "Handing your run to a runner. The runner cold-starts on first launch, then setup lines stream into the log below - first lines land within about a minute."
+            ? "Handing your run to a runner. The runner cold-starts on first launch, then setup lines stream into the log below - on a fresh node first lines land within about 3 minutes."
             : "Spinning up an isolated runner - on a fresh node this takes 2-4 minutes (image pull, then download, install, compile). Log lines appear here as they happen."}
         </p>
       )}
